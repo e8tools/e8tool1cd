@@ -67,6 +67,35 @@ bool try_store_blob_data(const TableRecord &record,
 						 TStream *&out);
 
 
+// Совместимость с разными версиями Boost: get_digest принимает либо
+// unsigned char[20] (Boost >= 1.8x), либо unsigned int[5] (более старые).
+// Обе перегрузки дают одинаковые байты, порядок полей — big-endian.
+template <typename Hash>
+static void boost_sha1_digest_uchar(Hash &h, unsigned char *out, ...)
+{
+	h.get_digest(reinterpret_cast<unsigned char (&)[20]>(*out));
+}
+
+template <typename Hash>
+static void boost_sha1_digest_uint(Hash &h, unsigned char *out, unsigned int)
+{
+	unsigned int d[5];
+	h.get_digest(d);
+	for (int i = 0; i < 5; i++) {
+		out[i * 4 + 0] = static_cast<unsigned char>((d[i] >> 24) & 0xff);
+		out[i * 4 + 1] = static_cast<unsigned char>((d[i] >> 16) & 0xff);
+		out[i * 4 + 2] = static_cast<unsigned char>((d[i] >> 8) & 0xff);
+		out[i * 4 + 3] = static_cast<unsigned char>(d[i] & 0xff);
+	}
+}
+
+template <typename Hash>
+static void boost_sha1_digest(Hash &h, unsigned char *out)
+{
+	boost_sha1_digest_uint(h, out, 0);
+}
+
+
 // Контрольная сумма тела объекта в том виде, как её пишет платформа:
 // SHA1 содержимого, закодированный base64 (20 байт -> 28 символов).
 static string sha1_base64(TStream *body)
@@ -85,18 +114,13 @@ static string sha1_base64(TStream *body)
 	}
 	body->Seek(old_pos, soFromBeginning);
 
-	unsigned int digest[5];
-	hash.get_digest(digest);
+	// У Boost до 1.8x get_digest берёт unsigned int[5], начиная с 1.8x —
+	// unsigned char[20]. Берём тот вид, который принимает текущая версия.
+	unsigned char bytes[20] = {0};
+	boost_sha1_digest(hash, bytes);
 
 	// SHA1 -> base64 в том же виде, что пишет платформа (28 символов с '=' на конце).
 	TTempStream raw;
-	unsigned char bytes[20];
-	for (int i = 0; i < 5; i++) {
-		bytes[i * 4 + 0] = static_cast<unsigned char>((digest[i] >> 24) & 0xff);
-		bytes[i * 4 + 1] = static_cast<unsigned char>((digest[i] >> 16) & 0xff);
-		bytes[i * 4 + 2] = static_cast<unsigned char>((digest[i] >> 8) & 0xff);
-		bytes[i * 4 + 3] = static_cast<unsigned char>(digest[i] & 0xff);
-	}
 	raw.Write(bytes, sizeof(bytes));
 	raw.Seek(0, soFromBeginning);
 
