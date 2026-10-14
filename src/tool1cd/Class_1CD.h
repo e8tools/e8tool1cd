@@ -220,6 +220,8 @@ public:
 	bool save_config(const boost::filesystem::path &file_name);
 	bool save_configsave(const boost::filesystem::path &file_name);
 	bool save_depot_config(const std::string &_filename, int32_t ver = 0);
+	bool extension_depot(); // признак хранилища расширения конфигурации (DEPOTVER = 100)
+
 	bool save_part_depot_config(const std::string &_filename, int32_t ver_begin, int32_t ver_end);
 	int32_t get_ver_depot_config(int32_t ver); // Получение номера версии конфигурации (0 - последняя, -1 - предпоследняя и т.д.)
 	bool save_config_ext(const boost::filesystem::path &file_name, const BinaryGuid &uid, const std::string &hashname);

@@ -2318,6 +2318,20 @@ string T_1CD::pagemaprec_presentation(pagemaprec& pmr)
 	}
 }
 
+// Хранилища расширений конфигурации записывают в DEPOT версию 100 (0x64)
+bool T_1CD::extension_depot()
+{
+	if (!is_depot) {
+		return false;
+	}
+	TableIterator depot_iterator(table_depot);
+	if (depot_iterator.eof()) {
+		return false;
+	}
+	return EqualIC(depot_iterator.current().get_string("DEPOTVER"), "6400000000000000");
+}
+
+
 depot_ver T_1CD::get_depot_version(const TableRecord &record)
 {
 	std::string Ver = record.get_string("DEPOTVER");

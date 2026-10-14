@@ -482,12 +482,19 @@ void App::save_depot_config(const ParsedCommand &pc)
 
 	cfpath = boost::filesystem::absolute(cfpath);
 
-	if (!boost::iequals(cfpath.extension().string(), CF_STR)) {
+	// Хранилища расширений выгружаются в файл .cfe, обычные хранилища — в .cf
+	const string default_cf_ext = base1CD->extension_depot() ? string(CFE_STR) : string(CF_STR);
+	const string given_cf_ext = cfpath.extension().string();
+
+	if (!boost::iequals(given_cf_ext, CF_STR) && !boost::iequals(given_cf_ext, CFE_STR)) {
 		if (!directory_exists(cfpath)) {
+			msreg_g.AddError("Неверный путь для выгрузки конфигурации хранилища: ожидается каталог или файл .cf / .cfe")
+					.with("Путь", cfpath.string());
 			return;
 		}
-		cfpath /= string("v").append(std::to_string(version_number)).append(CF_STR);
+		cfpath /= string("v").append(std::to_string(version_number)).append(default_cf_ext);
 	}
+
 	if (base1CD->save_depot_config(cfpath.string(), version_number)) {
 		msreg_g.AddMessage("Сохранение конфигурации хранилища завершено.", MessageState::Succesfull)
 				.with("Файл", cfpath.string());
