@@ -1,0 +1,521 @@
+name: Release
+
+# Сборка и публикация tool1cd (ctool1cd + gtool1cd).
+#
+#  * push в release_develop — сборка, тесты и артефакты, плюс обновление
+#    ЧЕРНОВОГО prerelease (тег-указатель release_develop-latest);
+#  * push тега вида v1.0.2 — сборка, тесты и опубликованный GitHub Release;
+#  * вручную (workflow_dispatch) — сборка и тесты с любого рефа.
+#
+# Ветка master здесь не участвует.
+#
+# Версия берётся из тега; для сборок по ветке — из src/version.h
+# (#define TOOL1CD_VERSION) с суффиксом -dev.<номер прогона>.
+#
+# Если шаг сборки, тестов или упаковки падает, последние 40 строк вывода
+# печатаются через ::error:: и видны в аннотациях (логи Actions требуют
+# входа в аккаунт).
+
+on:
+  push:
+    branches:
+      - release_develop
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  # ─────────────────────────────────────────────────────────────── Linux x86_64
+  # Сборка идёт в контейнере Debian 12, а не на ubuntu-24.04. У ubuntu-24.04
+  # glibc 2.39 и GCC 13, и бинарник требует GLIBC_2.38 / GLIBCXX_3.4.32: на
+  # Astra Linux и дистрибутивах постарше это «cannot open shared object file».
+  # Debian 12 даёт glibc 2.36, GCC 12 и Qt 6.4, а несистемные библиотеки
+  # (Qt, ICU, glib, pcre2, zstd, zlib, b2, double-conversion, libstdc++,
+  # libgcc, libgomp) складываются в архив рядом с бинарниками — на машине
+  # пользователя не требуется ни Qt6, ни что-либо ещё.
+  linux:
+    name: Linux x86_64
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.ver.outputs.version }}
+    steps:
+      - name: Получение исходников
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Определение версии
+        id: ver
+        run: |
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            V="${GITHUB_REF_NAME#v}"
+          else
+            BASE="$(sed -n 's/^#define TOOL1CD_VERSION "\(.*\)"/\1/p' src/version.h | head -1)"
+            V="${BASE}-dev.${GITHUB_RUN_NUMBER}"
+          fi
+          echo "version=${V}"
+          echo "version=${V}" >> "$GITHUB_OUTPUT"
+
+      - name: Сборка, тесты и упаковка (Debian 12)
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
+        run: |
+          set +e
+          docker run --rm -v "$PWD:/src" -w /src \
+            -e "VERSION=${VERSION}" -e LANG=C.UTF-8 -e LC_ALL=C.UTF-8 \
+            debian:12 bash -c '
+              set -Eeuo pipefail
+              # Весь вывод — в один поток: иначе docker перемешивает stdout и
+              # stderr и настоящая ошибка не попадает в конец лога.
+              exec 2>&1
+              trap "echo \"=== ОШИБКА на этапе: \${STAGE:-неизвестно}: \${BASH_COMMAND}\"" ERR
+
+              STAGE="apt: установка зависимостей"
+              apt-get update -qq
+              apt-get install -y --no-install-recommends \
+                build-essential cmake ninja-build python3 patchelf \
+                qt6-base-dev qt6-5compat-dev libgl1-mesa-dev \
+                libboost-filesystem-dev libboost-system-dev \
+                libboost-regex-dev zlib1g-dev
+
+              STAGE="cmake: конфигурация"
+              cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+
+              STAGE="сборка"
+              cmake --build build -j"$(nproc)"
+
+              STAGE="тесты"
+              ./build/bin/testproject
+
+              STAGE="проверка версии в собранном бинарнике"
+              ./build/bin/ctool1cd -h | head -3
+
+              STAGE="упаковка: архив"
+              NAME="tool1cd-${VERSION}-linux-x86_64"
+              DEST="dist/${NAME}"
+              mkdir -p "${DEST}/lib" "${DEST}/plugins/platforms"
+              install -m755 build/bin/ctool1cd "${DEST}/ctool1cd"
+              install -m755 build/bin/gtool1cd "${DEST}/gtool1cd"
+              install -m644 README.md  "${DEST}/README.md"
+              install -m644 BUILD.md   "${DEST}/BUILD.md"
+              install -m644 COPYING    "${DEST}/COPYING"
+
+              # Qt ищет подключаемые модули относительно каталога программы.
+              printf "%s\n" "[Paths]" "Plugins = plugins" > "${DEST}/qt.conf"
+
+              # Библиотеки собираются рекурсивно по ldd для каждого бинарника.
+              python3 .github/scripts/bundle-linux-libs.py \
+                --exe "${DEST}/ctool1cd" --dest "${DEST}/lib"
+              python3 .github/scripts/bundle-linux-libs.py \
+                --exe "${DEST}/gtool1cd" --dest "${DEST}/lib"
+
+              # Платформенный модуль Qt (xcb) нужен GUI: он подключается в
+              # рантайме, поэтому по ldd самого бинарника не виден.
+              QTPLUG="$(qtpaths6 --plugin-dir 2>/dev/null || true)"
+              [ -n "${QTPLUG}" ] || QTPLUG=/usr/lib/x86_64-linux-gnu/qt6/plugins
+              install -m755 "${QTPLUG}/platforms/libqxcb.so" \
+                             "${DEST}/plugins/platforms/libqxcb.so"
+              python3 .github/scripts/bundle-linux-libs.py \
+                --exe "${DEST}/plugins/platforms/libqxcb.so" --dest "${DEST}/lib"
+
+              # rpath прописывается после копирования. Именно RPATH (--force-rpath),
+              # а не RUNPATH: RUNPATH не наследуется зависимостями, и тогда Qt6 не
+              # находит в lib/ свои ICU, glib и pcre2. У каждой библиотеки — свой
+              # $ORIGIN, у модуля Qt — путь к каталогу библиотек программы.
+              python3 .github/scripts/bundle-linux-libs.py --patch \
+                --exe "${DEST}/ctool1cd" --dest "${DEST}/lib" --rpath "\$ORIGIN/lib"
+              python3 .github/scripts/bundle-linux-libs.py --patch \
+                --exe "${DEST}/gtool1cd" --dest "${DEST}/lib" --rpath "\$ORIGIN/lib"
+              patchelf --force-rpath --set-rpath "\$ORIGIN/../../lib" \
+                "${DEST}/plugins/platforms/libqxcb.so"
+
+              STAGE="проверка замыкания зависимостей"
+              python3 .github/scripts/bundle-linux-libs.py --check --dir "${DEST}"
+
+              STAGE="проверка запуска без системного Qt"
+              ( cd "${DEST}" && env -u LD_LIBRARY_PATH ./ctool1cd -h | head -2 )
+
+              # Дисплея в контейнере нет, поэтому запуск gtool1cd заведомо не
+              # удастся. Проверяем другое: что платформенный модуль Qt нашёлся
+              # и загрузился именно из архива, а не из системного каталога Qt.
+              GTOUT="$( cd "${DEST}" && env -u LD_LIBRARY_PATH QT_QPA_PLATFORM=xcb \
+                        QT_DEBUG_PLUGINS=1 ./gtool1cd 2>&1 | head -40 || true )"
+              grep -q "loaded library" <<<"${GTOUT}" \
+                || { echo "${GTOUT}"; echo "платформенный модуль Qt не загрузился"; false; }
+              grep -q "${DEST}/plugins/platforms/libqxcb.so" <<<"${GTOUT}" \
+                || { echo "${GTOUT}"; echo "модуль загружен не из архива"; false; }
+              echo "${GTOUT}" | grep -iE "loaded library|could not connect to display" | head -4
+
+              tar -C dist -czf "dist/${NAME}.tar.gz" "${NAME}"
+
+              STAGE="упаковка: .deb"
+              ROOT="dist/deb-root"
+              install -d "${ROOT}/opt/tool1cd/lib" "${ROOT}/opt/tool1cd/plugins/platforms"
+              cp -a "${DEST}/." "${ROOT}/opt/tool1cd/"
+              install -d "${ROOT}/usr/bin"
+              ln -sf /opt/tool1cd/ctool1cd "${ROOT}/usr/bin/ctool1cd"
+              ln -sf /opt/tool1cd/gtool1cd "${ROOT}/usr/bin/gtool1cd"
+              install -Dm644 README.md "${ROOT}/usr/share/doc/tool1cd/README.md"
+              install -Dm644 COPYING   "${ROOT}/usr/share/doc/tool1cd/copyright"
+              mkdir -p "${ROOT}/DEBIAN"
+              printf "%s\n" \
+                "Package: tool1cd" \
+                "Version: ${VERSION}" \
+                "Section: utils" \
+                "Priority: optional" \
+                "Architecture: amd64" \
+                "Maintainer: e8tools <https://github.com/e8tools/e8tool1cd>" \
+                "Description: Tool 1CD - utilities for 1C:Enterprise 1CD files" \
+                > "${ROOT}/DEBIAN/control"
+              dpkg-deb --build --root-owner-group "${ROOT}" "dist/tool1cd_${VERSION}_amd64.deb"
+
+              STAGE="готово"
+              echo "=== файлы ==="
+              ls -lh dist/*.tar.gz dist/*.deb
+              echo "=== состав архива ==="
+              tar tzf "dist/${NAME}.tar.gz" | head -25
+              echo "=== библиотек в lib/ ==="
+              ls -1 "${DEST}/lib" | wc -l
+            ' > linux-step.log 2>&1
+          rc=$?
+          if [ $rc -ne 0 ]; then
+            echo "::error::шаг завершился с кодом $rc"
+            tail -60 linux-step.log | sed "s/^/::error::/"
+          else
+            cat linux-step.log
+          fi
+          exit $rc
+
+      - name: Хвост лога при ошибке
+        if: failure()
+        run: |
+          {
+            echo "## Linux: хвост лога (сборка в Debian 12)"
+            echo '```'
+            tail -c 4000 linux-step.log 2>/dev/null || echo "лог linux-step.log не найден"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Артефакты
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux
+          path: |
+            dist/*.tar.gz
+            dist/*.deb
+          if-no-files-found: error
+
+  # ─────────────────────────────────────────────────────────── Windows x64 (MinGW)
+  windows:
+    name: Windows x64
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - name: Получение исходников
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: "MSYS2 UCRT64: Qt6, Boost, zlib"
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: false
+          install: >-
+            mingw-w64-ucrt-x86_64-gcc
+            mingw-w64-ucrt-x86_64-cmake
+            mingw-w64-ucrt-x86_64-ninja
+            mingw-w64-ucrt-x86_64-qt6-base
+            mingw-w64-ucrt-x86_64-qt6-5compat
+            mingw-w64-ucrt-x86_64-boost
+            mingw-w64-ucrt-x86_64-zlib
+            mingw-w64-ucrt-x86_64-python
+            coreutils
+            diffutils
+            zip
+
+      - name: Определение версии
+        id: ver
+        run: |
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            V="${GITHUB_REF_NAME#v}"
+          else
+            BASE="$(sed -n 's/^#define TOOL1CD_VERSION "\(.*\)"/\1/p' src/version.h | head -1)"
+            V="${BASE}-dev.${GITHUB_RUN_NUMBER}"
+          fi
+          echo "version=${V}"
+          echo "version=${V}" >> "$GITHUB_OUTPUT"
+
+      - name: Конфигурация
+        run: |
+          cmake -S . -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DBoost_USE_STATIC_LIBS=ON \
+            -DZLIB_USE_STATIC_LIBS=ON
+
+      - name: Сборка
+        run: |
+          set +e
+          cmake --build build -j2 > build-step.log 2>&1
+          rc=$?
+          if [ $rc -ne 0 ]; then
+            mapfile -t L < <(tail -40 build-step.log)
+            for l in "${L[@]}"; do echo "::error::$l"; done
+          else
+            tail -3 build-step.log
+          fi
+          exit $rc
+
+      - name: Тесты
+        run: |
+          set +e
+          PATH="${MINGW_PREFIX}/bin:$PATH" ./build/bin/testproject.exe > test-step.log 2>&1
+          rc=$?
+          if [ $rc -ne 0 ]; then lvl=error; else lvl=notice; fi
+          {
+            echo "=== testproject: код $rc ==="
+            cat test-step.log
+          } > diag.log 2>&1
+          mapfile -t L < <(tail -40 diag.log)
+          for l in "${L[@]}"; do echo "::$lvl::$l"; done
+          exit $rc
+
+      - name: Упаковка .zip
+        run: |
+          set +e
+          (
+            set -euo pipefail
+            V="${{ steps.ver.outputs.version }}"
+            NAME="tool1cd-${V}-win64"
+            DEST="dist/${NAME}"
+            mkdir -p "${DEST}/platforms"
+            cp build/bin/ctool1cd.exe "${DEST}/ctool1cd.exe"
+            cp build/bin/gtool1cd.exe "${DEST}/gtool1cd.exe"
+            cp README.md            "${DEST}/README.md"
+            cp BUILD.md             "${DEST}/BUILD.md"
+            cp COPYING              "${DEST}/COPYING"
+
+            # Qt на Windows ищет подключаемые модули в каталоге программы.
+            printf "%s\n" "[Paths]" "Plugins = ." > "${DEST}/qt.conf"
+
+            # Qt и его зависимости линкуются динамически: собираем замыкание
+            # рекурсивно по таблицам импорта. Ручной список пропускал транзитив
+            # (Qt6Core тянет ICU, zstd, pcre2, b2, double-conversion).
+            PY=python
+            command -v "$PY" >/dev/null 2>&1 || PY=python3
+            echo "интерпретатор: $(command -v "$PY")"
+            for exe in "${DEST}/ctool1cd.exe" "${DEST}/gtool1cd.exe"; do
+              "$PY" .github/scripts/bundle-windows-dlls.py \
+                --exe "$exe" --prefix "${MINGW_PREFIX}/bin" --dest "${DEST}"
+            done
+
+            # Платформенный модуль Qt нужен GUI: он подключается в рантайме,
+            # поэтому по таблице импорта самого exe не виден.
+            cp "${MINGW_PREFIX}/share/qt6/plugins/platforms/qwindows.dll" \
+               "${DEST}/platforms/qwindows.dll"
+            "$PY" .github/scripts/bundle-windows-dlls.py \
+              --exe "${DEST}/platforms/qwindows.dll" \
+              --prefix "${MINGW_PREFIX}/bin" --dest "${DEST}"
+
+            echo "=== каталог выпуска ==="
+            ls -1 "${DEST}" | sort
+            ( cd dist && zip -r "${NAME}.zip" "${NAME}" )
+            echo "=== проверка замыкания по распакованному архиву ==="
+            rm -rf "dist/verify" && mkdir -p "dist/verify"
+            ( cd dist/verify && unzip -qq "../${NAME}.zip" )
+            "$PY" .github/scripts/bundle-windows-dlls.py \
+              --exe "dist/verify/${NAME}/gtool1cd.exe" \
+              --prefix "dist/verify/${NAME}" --dest "dist/verify/tmp-check"
+          ) > pack.log 2>&1
+          rc=$?
+          if [ $rc -ne 0 ]; then
+            mapfile -t L < <(tail -40 pack.log)
+            for l in "${L[@]}"; do echo "::error::$l"; done
+          else
+            cat pack.log
+          fi
+          exit $rc
+
+      - name: Артефакты
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: dist/*.zip
+          if-no-files-found: error
+
+  # ─────────────────────────────────── Черновой prerelease (push в release_develop)
+  prerelease:
+    name: Черновой prerelease
+    needs: [linux, windows]
+    if: github.ref == 'refs/heads/release_develop'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Получение исходников
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Скачивание артефактов
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Файлы
+        run: find dist -type f -printf '%s\t%p\n' | sort -k2
+
+      # Тег-указатель без префикса v: он не попадает под фильтр tags: 'v*'
+      # и поэтому не запускает этот workflow повторно.
+      - name: Обновить тег-указатель
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag -f release_develop-latest "${GITHUB_SHA}"
+          git push -f origin release_develop-latest
+
+      - name: Обновить черновой prerelease
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: release_develop-latest
+          name: "Черновик release_develop (${{ needs.linux.outputs.version }})"
+          body: |
+            Проверочная сборка ветки `release_develop`, версия
+            `${{ needs.linux.outputs.version }}`, коммит ${{ github.sha }}.
+
+            Это черновик: он не виден публично и обновляется при каждом push
+            в `release_develop`. Внутри — те же файлы, что публикуются в
+            реальном релизе по тегу.
+          draft: true
+          prerelease: true
+          files: |
+            dist/*.tar.gz
+            dist/*.deb
+            dist/*.zip
+
+  # ──────────────────────────────────────────────────────── GitHub Release (тег)
+  release:
+    name: Публикация релиза
+    needs: [linux, windows]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Получение исходников
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Скачивание артефактов
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Что публикуем
+        run: find dist -type f -printf '%s\t%p\n' | sort -k2
+
+      # Описание выпуска лежит в репозитории: docs/release-notes/<тег>.md.
+      # Файл должен попасть в тот же коммит, на который поставлен тег.
+      - name: Описание релиза
+        run: |
+          set -euo pipefail
+          NOTES="docs/release-notes/${GITHUB_REF_NAME}.md"
+          if [ -f "$NOTES" ]; then
+            cp "$NOTES" dist/release-body.md
+            echo "описание: $NOTES"
+          else
+            PREV="$(git describe --tags --abbrev=0 "${GITHUB_REF_NAME}^" 2>/dev/null || true)"
+            {
+              echo "## Изменения"
+              echo
+              if [ -n "$PREV" ]; then
+                git log --no-merges --pretty='- %s' "${PREV}..${GITHUB_REF_NAME}"
+                echo
+                echo "Полный список: https://github.com/${GITHUB_REPOSITORY}/compare/${PREV}...${GITHUB_REF_NAME}"
+              else
+                git log --no-merges --pretty='- %s' -20
+              fi
+            } > dist/release-body.md
+            echo "описание: файла $NOTES нет, собрано из истории коммитов"
+          fi
+          echo "--- описание ---"
+          cat dist/release-body.md
+
+      - name: Проверка публикуемых файлов
+        run: |
+          set -uo pipefail
+          V="${GITHUB_REF_NAME#v}"
+          tar -xzf "$(ls dist/*.tar.gz | head -1)" -C dist
+          BIN="$(ls -d dist/tool1cd-${V}-linux-x86_64 | head -1)"
+          echo "=== состав архива ==="
+          find "$BIN" -maxdepth 2 -printf '%s\t%p\n' | sort -k2 | head -20
+          echo "=== версия, которую печатает выпущенный бинарник ==="
+          OUT="$( cd "$BIN" && env -u LD_LIBRARY_PATH ./ctool1cd -h | head -3 )"
+          echo "$OUT"
+          if ! grep -q "${V}" <<<"$OUT"; then
+            echo "::error::выпущенный ctool1cd не упоминает версию ${V}"
+            exit 1
+          fi
+          echo "=== содержимое Windows-архива ==="
+          unzip -l dist/*.zip | head -20
+          echo "::notice::архивы собраны, версия ${V} в бинарнике подтверждена"
+
+      - name: Создание релиза и загрузка артефактов
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/*.tar.gz
+            dist/*.deb
+            dist/*.zip
+          fail_on_unmatched_files: true
+
+      # Описание ставим явно через API: так результат проверяем, а итог
+      # печатается аннотацией (логи Actions без входа в аккаунт не читаются).
+      - name: Описание релиза в GitHub
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -uo pipefail
+          V="${GITHUB_REF_NAME}"
+          API="https://api.github.com/repos/${GITHUB_REPOSITORY}"
+
+          if [ ! -s dist/release-body.md ]; then
+            echo "::error::описание dist/release-body.md отсутствует или пусто"
+            exit 1
+          fi
+          echo "::notice::описание для ${V}: $(wc -c < dist/release-body.md) байт"
+
+          python3 - <<'PY' > /tmp/body.json
+          import json
+          print(json.dumps({"body": open("dist/release-body.md", encoding="utf-8").read()}))
+          PY
+
+          ID="$(curl -sS -H "Authorization: Bearer ${GH_TOKEN}" \
+                       -H "Accept: application/vnd.github+json" \
+                       "${API}/releases/tags/${V}" \
+                | python3 -c "import json,sys;print(json.load(sys.stdin).get('id',''))")"
+          if [ -z "$ID" ]; then
+            echo "::error::релиз ${V} не найден через API"
+            exit 1
+          fi
+
+          curl -sS -X PATCH \
+               -H "Authorization: Bearer ${GH_TOKEN}" \
+               -H "Accept: application/vnd.github+json" \
+               -H "Content-Type: application/json" \
+               --data @/tmp/body.json \
+               "${API}/releases/${ID}" > /tmp/rel.json
+
+          python3 -c "
+          import json
+          d = json.load(open('/tmp/rel.json'))
+          if 'tag_name' not in d:
+              print('::error::не удалось обновить описание: %s' % str(d)[:200]); raise SystemExit(1)
+          print('::notice::%s: описание %d символов, файлов %d, %s'
+                % (d['tag_name'], len(d['body'] or ''), len(d['assets']), d['html_url']))
+          print(d['body'])
+          "
