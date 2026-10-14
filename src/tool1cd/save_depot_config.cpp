@@ -39,6 +39,7 @@
 #include "SystemClasses/String.hpp"
 
 #include <boost/uuid/detail/sha1.hpp>
+#include <cstdint>
 #include <fstream>
 #include <map>
 
@@ -67,20 +68,36 @@ bool try_store_blob_data(const TableRecord &record,
 						 TStream *&out);
 
 
-// Совместимость с разными версиями Boost: get_digest принимает либо
-// unsigned char[20] (Boost >= 1.8x), либо unsigned int[5] (более старые).
-// Обе перегрузки дают одинаковые байты, порядок полей — big-endian.
+namespace {
+
+// Boost до 1.8x: get_digest(unsigned int (&)[5]) — 5 слов по 4 байта.
 template <typename Hash>
-static void boost_sha1_digest_uchar(Hash &h, unsigned char *out, ...)
+void sha1_digest_uint(Hash &h, unsigned int (&d)[5], int)
 {
-	h.get_digest(reinterpret_cast<unsigned char (&)[20]>(*out));
+	h.get_digest(d);
 }
 
+// Boost >= 1.8x: get_digest(unsigned char (&)[20]) — байты как есть.
 template <typename Hash>
-static void boost_sha1_digest_uint(Hash &h, unsigned char *out, unsigned int)
+void sha1_digest_uint(Hash &h, unsigned int (&d)[5], long)
 {
-	unsigned int d[5];
-	h.get_digest(d);
+	unsigned char b[20];
+	h.get_digest(b);
+	for (int i = 0; i < 5; i++) {
+		d[i] = (static_cast<unsigned int>(b[i * 4 + 0]) << 24) |
+		       (static_cast<unsigned int>(b[i * 4 + 1]) << 16) |
+		       (static_cast<unsigned int>(b[i * 4 + 2]) << 8) |
+		        static_cast<unsigned int>(b[i * 4 + 3]);
+	}
+}
+
+// Дайджест в виде 20 байт: у обеих версий Boost порядок полей big-endian,
+// поэтому слова разворачиваются побайтово одинаково.
+template <typename Hash>
+void sha1_digest_bytes(Hash &h, unsigned char (&out)[20])
+{
+	unsigned int d[5] = {0, 0, 0, 0, 0};
+	sha1_digest_uint(h, d, 0);
 	for (int i = 0; i < 5; i++) {
 		out[i * 4 + 0] = static_cast<unsigned char>((d[i] >> 24) & 0xff);
 		out[i * 4 + 1] = static_cast<unsigned char>((d[i] >> 16) & 0xff);
@@ -89,15 +106,9 @@ static void boost_sha1_digest_uint(Hash &h, unsigned char *out, unsigned int)
 	}
 }
 
-template <typename Hash>
-static void boost_sha1_digest(Hash &h, unsigned char *out)
-{
-	boost_sha1_digest_uint(h, out, 0);
-}
+} // namespace
 
 
-// Контрольная сумма тела объекта в том виде, как её пишет платформа:
-// SHA1 содержимого, закодированный base64 (20 байт -> 28 символов).
 static string sha1_base64(TStream *body)
 {
 	unsigned char buffer[8192];
@@ -117,7 +128,7 @@ static string sha1_base64(TStream *body)
 	// У Boost до 1.8x get_digest берёт unsigned int[5], начиная с 1.8x —
 	// unsigned char[20]. Берём тот вид, который принимает текущая версия.
 	unsigned char bytes[20] = {0};
-	boost_sha1_digest(hash, bytes);
+	sha1_digest_bytes(hash, bytes);
 
 	// SHA1 -> base64 в том же виде, что пишет платформа (28 символов с '=' на конце).
 	TTempStream raw;
