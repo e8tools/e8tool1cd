@@ -20,6 +20,7 @@
 */
 
 #include "ParseCommandLine.h"
+#include "../version.h"
 #include "SystemClasses/String.hpp"
 
 using namespace System;
@@ -84,7 +85,7 @@ CommandDefinition CommandParse::definitions[] =
 
 
 std::string CommandParse::helpstring =
-"ctool1cd (с) 2009-2017 awa\r\n\
+"ctool1cd " TOOL1CD_VERSION " (с) 2009-2017 awa\r\n\
 \r\n\
 Запуск:\r\n\
 ctool1cd.exe [<ключи>] <1CD файл> [<ключи>]\r\n\
