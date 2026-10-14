@@ -309,9 +309,17 @@ jobs:
             PY=python
             command -v "$PY" >/dev/null 2>&1 || PY=python3
             echo "интерпретатор: $(command -v "$PY")"
+
+            # libtool1cd.dll собирается вместе с программой и лежит в дереве
+            # сборки, а не в bin MSYS2 — без него exe не запустится.
+            EXTRA=()
+            while read -r d; do EXTRA+=(--extra-dir "$d"); done \
+              < <(find build -name '*.dll' -printf '%h\n' | sort -u)
+            echo "каталоги с DLL в сборке: ${EXTRA[*]:-нет}"
+
             for exe in "${DEST}/ctool1cd.exe" "${DEST}/gtool1cd.exe"; do
               "$PY" .github/scripts/bundle-windows-dlls.py \
-                --exe "$exe" --prefix "${MINGW_PREFIX}/bin" --dest "${DEST}"
+                --exe "$exe" --prefix "${MINGW_PREFIX}/bin" --dest "${DEST}" "${EXTRA[@]}"
             done
 
             # Платформенный модуль Qt нужен GUI: он подключается в рантайме,
@@ -320,7 +328,7 @@ jobs:
                "${DEST}/platforms/qwindows.dll"
             "$PY" .github/scripts/bundle-windows-dlls.py \
               --exe "${DEST}/platforms/qwindows.dll" \
-              --prefix "${MINGW_PREFIX}/bin" --dest "${DEST}"
+              --prefix "${MINGW_PREFIX}/bin" --dest "${DEST}" "${EXTRA[@]}"
 
             echo "=== каталог выпуска ==="
             ls -1 "${DEST}" | sort
@@ -330,6 +338,9 @@ jobs:
             ( cd dist/verify && unzip -qq "../${NAME}.zip" )
             "$PY" .github/scripts/bundle-windows-dlls.py \
               --exe "dist/verify/${NAME}/gtool1cd.exe" \
+              --prefix "dist/verify/${NAME}" --dest "dist/verify/tmp-check"
+            "$PY" .github/scripts/bundle-windows-dlls.py \
+              --exe "dist/verify/${NAME}/ctool1cd.exe" \
               --prefix "dist/verify/${NAME}" --dest "dist/verify/tmp-check"
           ) > pack.log 2>&1
           rc=$?

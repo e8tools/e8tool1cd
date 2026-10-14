@@ -8,7 +8,9 @@ zstd, pcre2, b2 и double-conversion. Пока список DLL перечисл
 "система не обнаружила libicuuc78.dll".
 
 DLL считается «нашей», если файл с таким именем есть в каталоге MSYS2 bin
-(источник поставки). Всё остальное — системное (Windows 10+ отдаёт api-ms-win-*
+(источник поставки) или в одном из дополнительных каталогов --extra-dir: часть
+библиотек проекта (libtool1cd.dll) собирается вместе с программой и лежит в
+дереве сборки, а не в bin MSYS2. Всё остальное — системное (Windows 10+ отдаёт api-ms-win-*
 и классические системные библиотеки сам). Если чего-то не нашлось ни в bin,
 ни в списке системных — это ошибка упаковки, и скрипт завершается с кодом 1,
 чтобы неполный архив не уехал в релиз.
@@ -61,14 +63,20 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--exe", required=True, help="главный исполняемый файл")
     ap.add_argument("--prefix", required=True, help="каталог bin MSYS2 — источник DLL")
+    ap.add_argument("--extra-dir", action="append", default=[],
+                    help="дополнительный каталог поиска DLL (например дерево сборки); можно несколько")
     ap.add_argument("--dest", required=True, help="каталог выпуска")
     a = ap.parse_args()
     os.makedirs(a.dest, exist_ok=True)
 
     index = {}
-    for f in os.listdir(a.prefix):
-        if f.lower().endswith(".dll"):
-            index[f.lower()] = os.path.join(a.prefix, f)
+    for d in [a.prefix] + a.extra_dir:
+        if not os.path.isdir(d):
+            print("bundle-windows-dlls: каталог %s отсутствует, пропущен" % d)
+            continue
+        for f in os.listdir(d):
+            if f.lower().endswith(".dll"):
+                index.setdefault(f.lower(), os.path.join(d, f))
 
     copied, queue, seen, unresolved = [], [a.exe], set(), []
     while queue:
@@ -81,7 +89,8 @@ def main():
             src = index.get(low)
             if src:
                 dst = os.path.join(a.dest, os.path.basename(src))
-                shutil.copy2(src, dst)
+                if os.path.abspath(src) != os.path.abspath(dst):
+                    shutil.copy2(src, dst)
                 copied.append(os.path.basename(src))
                 queue.append(dst)
             elif not is_system(name):
