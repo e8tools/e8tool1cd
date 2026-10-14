@@ -91,7 +91,7 @@ jobs:
               ./build/bin/testproject
 
               STAGE="проверка версии в собранном бинарнике"
-              ./build/bin/ctool1cd -h | head -3
+              ./build/bin/ctool1cd -h | head -3 || true
 
               STAGE="упаковка: архив"
               NAME="tool1cd-${VERSION}-linux-x86_64"
@@ -136,7 +136,7 @@ jobs:
               python3 .github/scripts/bundle-linux-libs.py --check --dir "${DEST}"
 
               STAGE="проверка запуска без системного Qt"
-              ( cd "${DEST}" && env -u LD_LIBRARY_PATH ./ctool1cd -h | head -2 )
+              ( cd "${DEST}" && env -u LD_LIBRARY_PATH ./ctool1cd -h | head -2 ) || true
 
               # Дисплея в контейнере нет, поэтому запуск gtool1cd заведомо не
               # удастся. Проверяем другое: что платформенный модуль Qt нашёлся
@@ -147,7 +147,7 @@ jobs:
                 || { echo "${GTOUT}"; echo "платформенный модуль Qt не загрузился"; false; }
               grep -q "${DEST}/plugins/platforms/libqxcb.so" <<<"${GTOUT}" \
                 || { echo "${GTOUT}"; echo "модуль загружен не из архива"; false; }
-              echo "${GTOUT}" | grep -iE "loaded library|could not connect to display" | head -4
+              echo "${GTOUT}" | grep -iE "loaded library|could not connect to display" | head -4 || true
 
               tar -C dist -czf "dist/${NAME}.tar.gz" "${NAME}"
 
@@ -176,7 +176,9 @@ jobs:
               echo "=== файлы ==="
               ls -lh dist/*.tar.gz dist/*.deb
               echo "=== состав архива ==="
-              tar tzf "dist/${NAME}.tar.gz" | head -25
+              # head закрывает поток раньше, чем tar договорит список: с pipefail
+              # такой конвейер возвращает 141 (SIGPIPE) и роняет шаг.
+              tar tzf "dist/${NAME}.tar.gz" | head -25 || true
               echo "=== библиотек в lib/ ==="
               ls -1 "${DEST}/lib" | wc -l
             ' > linux-step.log 2>&1
@@ -463,16 +465,16 @@ jobs:
           tar -xzf "$(ls dist/*.tar.gz | head -1)" -C dist
           BIN="$(ls -d dist/tool1cd-${V}-linux-x86_64 | head -1)"
           echo "=== состав архива ==="
-          find "$BIN" -maxdepth 2 -printf '%s\t%p\n' | sort -k2 | head -20
+          find "$BIN" -maxdepth 2 -printf '%s\t%p\n' | sort -k2 | head -20 || true
           echo "=== версия, которую печатает выпущенный бинарник ==="
-          OUT="$( cd "$BIN" && env -u LD_LIBRARY_PATH ./ctool1cd -h | head -3 )"
+          OUT="$( cd "$BIN" && env -u LD_LIBRARY_PATH ./ctool1cd -h | head -3 || true )"
           echo "$OUT"
           if ! grep -q "${V}" <<<"$OUT"; then
             echo "::error::выпущенный ctool1cd не упоминает версию ${V}"
             exit 1
           fi
           echo "=== содержимое Windows-архива ==="
-          unzip -l dist/*.zip | head -20
+          unzip -l dist/*.zip | head -20 || true
           echo "::notice::архивы собраны, версия ${V} в бинарнике подтверждена"
 
       - name: Создание релиза и загрузка артефактов

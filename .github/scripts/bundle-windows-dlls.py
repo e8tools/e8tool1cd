@@ -39,10 +39,17 @@ SYSTEM_DLLS = {
 
 SYSTEM_PREFIXES = ("api-ms-win-", "ext-ms-win-")
 
+# Каталог системных библиотек. Сверяемся с ним, а не пытаемся перечислить руками
+# всё, что импортирует Qt: DirectWrite и Direct3D приходят из System32, в списке
+# выше их не было, и упаковка падала на DWrite.dll, d3d11.dll, d3d12.dll.
+SYSTEM32 = os.path.join(os.environ.get("SYSTEMROOT", r"C:\Windows"), "System32")
+
 
 def is_system(name):
     low = name.lower()
-    return low in SYSTEM_DLLS or low.startswith(SYSTEM_PREFIXES)
+    if low in SYSTEM_DLLS or low.startswith(SYSTEM_PREFIXES):
+        return True
+    return os.path.exists(os.path.join(SYSTEM32, name))
 
 
 def imported_dlls(path):
