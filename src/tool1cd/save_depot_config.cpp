@@ -477,6 +477,22 @@ bool T_1CD::save_depot_config(const string &_filename, int32_t ver)
 }
 
 
+// Проверка, что поток содержит файл конфигурации (контейнер 1С), а не
+// служебные данные хранилища
+static bool is_v8_catalog(TStream *stream)
+{
+	try {
+		stream->Seek(0, soFromBeginning);
+		V8Catalog catalog(stream, true, true);
+		return catalog.is_catalog();
+	}
+	catch (...) {
+		return false;
+	}
+}
+
+
+
 bool T_1CD::try_save_snapshot(const TableRecord &version_record,
 							  int ver,
 							  const BinaryGuid &rootobj,
@@ -512,16 +528,6 @@ bool T_1CD::try_save_snapshot(const TableRecord &version_record,
 		return false;
 	}
 
-	std::shared_ptr<TStream>out;
-	try
-	{
-		out.reset(new TFileStream(target_file_path, fmCreate | fmShareDenyWrite));
-	}
-	catch(...) {
-		throw DetailedException("Не удалось создать файл конфигурации")
-				.add_detail("Имя файла", target_file_path.string());
-	}
-
 	snapshot_version snap_ver = snapshot_version::Ver1;
 	BinaryGuid snapshot_maker = version_record.get<BinaryGuid>("SNAPSHOTMAKER");
 
@@ -532,11 +538,15 @@ bool T_1CD::try_save_snapshot(const TableRecord &version_record,
 		snap_ver = snapshot_version::Ver2;
 	};
 
+	// Содержимое снэпшота разбираем в память: целевой файл создаётся только
+	// после проверок, чтобы в каталоге выгрузки не осталось испорченного файла
+	TTempStream content;
+
 	switch (snap_ver) {
 		case snapshot_version::Ver1:
 		{
 			try {
-				ZInflateStream(in.get(), out.get());
+				ZInflateStream(in.get(), &content);
 			}
 			catch(...) {
 				msreg_m.AddMessage("Не удалось распаковать файл снэпшота", MessageState::Warning)
@@ -548,29 +558,55 @@ bool T_1CD::try_save_snapshot(const TableRecord &version_record,
 		}
 		case snapshot_version::Ver2:
 		{
-			out->CopyFrom(in.get(), 0);
+			content.CopyFrom(in.get(), 0);
 			break;
 		}
 		default:
 		{
 			msreg_m.AddMessage("Неизвестная версия снэпшота", MessageState::Warning)
-								.with("Имя файла", file_snap.string());
+									.with("Имя файла", file_snap.string());
 			return false;
 		}
 	};
 
 	uint32_t snapshot_crc = version_record.get<uint32_t>("SNAPSHOTCRC");
-	uint32_t calc_crc = _crc32(out.get());
-	if (calc_crc == snapshot_crc) {
-		return true;
-	}
-	msreg_m.AddMessage("Файл снэпшота испорчен (не совпала контрольная сумма)", MessageState::Warning)
+	uint32_t calc_crc = _crc32(&content);
+	if (calc_crc != snapshot_crc) {
+		msreg_m.AddMessage("Файл снэпшота испорчен (не совпала контрольная сумма)", MessageState::Warning)
 						.with("Имя файла", file_snap.string())
 						.with("Требуемая версия", ver)
 						.with("Должен быть CRC32", to_hex_string(snapshot_crc))
 						.with("Получился CRC32", to_hex_string(calc_crc));
-	return false;
+		return false;
+	}
+
+	// Снэпшот может содержать не файл конфигурации, а служебную сериализацию
+	// версии хранилища (так устроены, в частности, хранилища расширений).
+	// Такой файл нельзя отдавать как результат выгрузки: конфигурацию
+	// собираем по таблицам хранилища.
+	if (!is_v8_catalog(&content)) {
+		msreg_m.AddMessage("Содержимое снэпшота не является файлом конфигурации, выгрузка выполнена по таблицам хранилища", MessageState::Warning)
+						.with("Имя файла", file_snap.string())
+						.with("Требуемая версия", ver);
+		return false;
+	}
+
+	std::shared_ptr<TStream> out;
+	try
+	{
+		out.reset(new TFileStream(target_file_path, fmCreate | fmShareDenyWrite));
+	}
+	catch(...) {
+		throw DetailedException("Не удалось создать файл конфигурации")
+				.add_detail("Имя файла", target_file_path.string());
+	}
+
+	content.Seek(0, soFromBeginning);
+	out->CopyFrom(&content, 0);
+
+	return true;
 }
+
 
 bool try_store_blob_data(const TableRecord &record,
 						 const Field *data_field,
