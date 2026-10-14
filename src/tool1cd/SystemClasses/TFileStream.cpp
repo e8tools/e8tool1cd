@@ -26,13 +26,26 @@ namespace System {
 
 namespace Classes {
 
+// Режим открытия определяется переданным fileMode. Открывать на запись
+// файл, который читают (fmOpenRead), нельзя: на Windows это отказывает
+// для файла только для чтения или занятого другим процессом, размер
+// потока остаётся нулевым и первое же Seek даёт "Wrong offset".
+static std::ios_base::openmode stream_mode(const uint16_t fileMode)
+{
+	std::ios_base::openmode mode = std::ios::binary;
+	if (fileMode == fmCreate) {
+		return mode | std::ios::in | std::ios::out | std::ios::trunc;
+	}
+	if (fileMode == fmOpenRead) {
+		return mode | std::ios::in;
+	}
+	return mode | std::ios::in | std::ios::out;
+}
+
 TFileStream::TFileStream(const std::string &FileName, const uint16_t fileMode)
 	: TWrapperStream(), filename(FileName)
 {
-	std::ios_base::openmode mode = std::ios::binary | std::ios::in | std::ios::out;
-	if (fileMode == fmCreate) {
-		mode |= std::ios::trunc;
-	}
+	std::ios_base::openmode mode = stream_mode(fileMode);
 	_stream = std::make_shared<boost::filesystem::fstream>(boost::filesystem::path(filename), mode);
 	reopen(_stream);
 	m_position = 0;
@@ -41,10 +54,7 @@ TFileStream::TFileStream(const std::string &FileName, const uint16_t fileMode)
 TFileStream::TFileStream(const boost::filesystem::path &path, const uint16_t fileMode)
 	: TWrapperStream(), filename(path.string())
 {
-	std::ios_base::openmode mode = std::ios::binary | std::ios::in | std::ios::out;
-	if (fileMode == fmCreate) {
-		mode |= std::ios::trunc;
-	}
+	std::ios_base::openmode mode = stream_mode(fileMode);
 	_stream = std::make_shared<boost::filesystem::fstream>(path, mode);
 	reopen(_stream);
 	m_position = 0;
@@ -68,8 +78,8 @@ void TFileStream::Reopen()
 			return;
 		}
 	}
-	std::ios_base::openmode mode = std::ios::binary | std::ios::in | std::ios::out;
-	_stream = std::make_shared<boost::filesystem::fstream>(boost::filesystem::path(filename), mode);
+	_stream = std::make_shared<boost::filesystem::fstream>(
+		boost::filesystem::path(filename), std::ios::binary | std::ios::in | std::ios::out);
 	reopen(_stream);
 }
 
