@@ -70,16 +70,19 @@ bool try_store_blob_data(const TableRecord &record,
 
 namespace {
 
-// Boost до 1.8x: get_digest(unsigned int (&)[5]) — 5 слов по 4 байта.
+// get_digest есть в двух видах: Boost до 1.8x принимает unsigned int[5],
+// с 1.8x — unsigned char[20]. Выбираем по типу аргумента, который реально
+// принимает вызов, через SFINAE-проверку выражения вызова.
 template <typename Hash>
-void sha1_digest_uint(Hash &h, unsigned int (&d)[5], int)
+auto sha1_digest_impl(Hash &h, unsigned int (&d)[5], int)
+	-> decltype(h.get_digest(d), void())
 {
 	h.get_digest(d);
 }
 
-// Boost >= 1.8x: get_digest(unsigned char (&)[20]) — байты как есть.
 template <typename Hash>
-void sha1_digest_uint(Hash &h, unsigned int (&d)[5], long)
+auto sha1_digest_impl(Hash &h, unsigned int (&d)[5], long)
+	-> decltype(h.get_digest(*reinterpret_cast<unsigned char (*)[20]>(d)), void())
 {
 	unsigned char b[20];
 	h.get_digest(b);
@@ -91,13 +94,12 @@ void sha1_digest_uint(Hash &h, unsigned int (&d)[5], long)
 	}
 }
 
-// Дайджест в виде 20 байт: у обеих версий Boost порядок полей big-endian,
-// поэтому слова разворачиваются побайтово одинаково.
+// Дайджест в виде 20 байт: у обеих версий Boost порядок полей big-endian.
 template <typename Hash>
 void sha1_digest_bytes(Hash &h, unsigned char (&out)[20])
 {
 	unsigned int d[5] = {0, 0, 0, 0, 0};
-	sha1_digest_uint(h, d, 0);
+	sha1_digest_impl(h, d, 0);
 	for (int i = 0; i < 5; i++) {
 		out[i * 4 + 0] = static_cast<unsigned char>((d[i] >> 24) & 0xff);
 		out[i * 4 + 1] = static_cast<unsigned char>((d[i] >> 16) & 0xff);
