@@ -205,7 +205,7 @@ bool T_1CD::save_depot_config(const string &_filename, int32_t ver, bool use_sna
 		boost::filesystem::path root_dir = root_path.parent_path();
 		pack_directory.init(root_dir);
 		if (!pack_directory.is_available()) {
-			msreg_m.AddMessage("Не найден каталог данных хранилища, данные будут прочитаны из таблиц", MessageState::Warning)
+			msreg_m.AddMessage("Не найден каталог данных хранилища, часть объектов может быть недоступна", MessageState::Warning)
 					.with("Каталог", (root_dir / "data" / "pack").string());
 		}
 	}
@@ -214,6 +214,20 @@ bool T_1CD::save_depot_config(const string &_filename, int32_t ver, bool use_sna
 		fldh_datahash = nullptr;
 		flde_datahash = nullptr;
 	}
+
+	// Тела объектов хранилищ формата 6+ лежат в каталоге data рядом с .1CD.
+	// Если его нет, объект взять негде — сообщаем об этом прямо.
+	auto object_read_error = [&pack_directory](const char *table, const string &object, const string &ver) {
+		DetailedException ex("Ошибка чтения объекта конфигурации");
+		ex.add_detail("Таблица", table)
+				.add_detail("Объект", object)
+				.add_detail("Версия", ver);
+		if (!pack_directory.is_available()) {
+			ex.add_detail("Причина", "нет каталога данных хранилища (data/pack, data/objects)")
+					.add_detail("Что делать", "выгружать из полной копии хранилища: файл .1CD вместе с каталогом data");
+		}
+		return ex;
+	};
 
 	Index *index_history = table_history->get_index("PK");
 
@@ -293,10 +307,7 @@ bool T_1CD::save_depot_config(const string &_filename, int32_t ver, bool use_sna
 
 				string sObjId = rech1->get<BinaryGuid>(fldh_objid).as_MS();
 				if (!try_store_blob_data(*rech1, fldh_objdata, oldformat, fldh_datahash, pack_directory, out)) {
-					throw DetailedException("Ошибка чтения объекта конфигурации")
-						.add_detail("Таблица", "HISTORY")
-						.add_detail("Объект", sObjId)
-						.add_detail("Версия", rech1->get_string(fldh_vernum));
+					throw object_read_error("HISTORY", sObjId, rech1->get_string(fldh_vernum));
 				}
 				{
 					if(oldformat)
@@ -349,10 +360,7 @@ bool T_1CD::save_depot_config(const string &_filename, int32_t ver, bool use_sna
 
 						TStream *out;
 						if (!try_store_blob_data(*rec, flde_extdata, false, flde_datahash, pack_directory, out)) {
-							throw DetailedException("Ошибка чтения объекта конфигурации")
-								.add_detail("Таблица", "EXTERNALS")
-								.add_detail("Объект", ext_name)
-								.add_detail("Версия", rec->get_string(flde_vernum));
+							throw object_read_error("EXTERNALS", ext_name, rec->get_string(flde_vernum));
 						}
 						vermap[ext_name] = rec->get<BinaryGuid>(flde_extverid).as_MS();
 						extmap[ext_name] = out;
