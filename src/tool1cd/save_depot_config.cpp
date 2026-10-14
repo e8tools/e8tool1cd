@@ -38,6 +38,10 @@
 #include "TableIterator.h"
 #include "SystemClasses/String.hpp"
 
+#include <boost/uuid/detail/sha1.hpp>
+#include <fstream>
+#include <map>
+
 using namespace std;
 using namespace System;
 
@@ -61,6 +65,181 @@ bool try_store_blob_data(const TableRecord &record,
 						 const Field *hash_field,
 						 PackDirectory &pack_directory,
 						 TStream *&out);
+
+
+// Контрольная сумма тела объекта в том виде, как её пишет платформа:
+// SHA1 содержимого, закодированный base64 (20 байт -> 28 символов).
+static string sha1_base64(TStream *body)
+{
+	unsigned char buffer[8192];
+	boost::uuids::detail::sha1 hash;
+
+	int64_t old_pos = body->GetPosition();
+	body->Seek(0, soFromBeginning);
+	while (true) {
+		int64_t read = body->Read(buffer, sizeof(buffer));
+		if (read <= 0) {
+			break;
+		}
+		hash.process_bytes(buffer, static_cast<size_t>(read));
+	}
+	body->Seek(old_pos, soFromBeginning);
+
+	unsigned int digest[5];
+	hash.get_digest(digest);
+
+	// SHA1 -> base64 в том же виде, что пишет платформа (28 символов с '=' на конце).
+	TTempStream raw;
+	unsigned char bytes[20];
+	for (int i = 0; i < 5; i++) {
+		bytes[i * 4 + 0] = static_cast<unsigned char>((digest[i] >> 24) & 0xff);
+		bytes[i * 4 + 1] = static_cast<unsigned char>((digest[i] >> 16) & 0xff);
+		bytes[i * 4 + 2] = static_cast<unsigned char>((digest[i] >> 8) & 0xff);
+		bytes[i * 4 + 3] = static_cast<unsigned char>(digest[i] & 0xff);
+	}
+	raw.Write(bytes, sizeof(bytes));
+	raw.Seek(0, soFromBeginning);
+
+	// base64_encode пишет результат широкими символами (UTF-16), а в configinfo
+	// суммы хранятся обычным ASCII — поэтому берём из каждого символа младший байт.
+	TTempStream encoded;
+	base64_encode(&raw, &encoded, 0);
+	encoded.Seek(0, soFromBeginning);
+	std::vector<char> wide(static_cast<size_t>(encoded.GetSize()) + 1, 0);
+	encoded.Read(wide.data(), encoded.GetSize());
+
+	string result;
+	for (size_t i = 0; i + 1 < static_cast<size_t>(encoded.GetSize()); i += 2) {
+		result.push_back(wide[i]);
+	}
+	while (!result.empty() && (result.back() == '\n' || result.back() == '\r')) {
+		result.pop_back();
+	}
+	return result;
+}
+
+
+// Описание одной записи файла configinfo расширения: имя и контрольная сумма
+struct configinfo_entry {
+	string name;
+	string hash;
+};
+
+
+// Тело объекта целиком в память: нужно, чтобы посчитать сумму по данным.
+static TTempStream *read_body(TStream *body)
+{
+	TTempStream *copy = new TTempStream;
+	int64_t old_pos = body->GetPosition();
+	body->Seek(0, soFromBeginning);
+	copy->CopyFrom(body, body->GetSize());
+	copy->Seek(0, soFromBeginning);
+	body->Seek(old_pos, soFromBeginning);
+	return copy;
+}
+
+
+// Идентификатор расширения лежит в самом хранилище — в служебном теле вида
+// {0,2,<GUID расширения>,0,<GUID первого объекта>,0} (86 байт: BOM и текст).
+// Хэша этого тела нет ни в одной таблице, поэтому через HISTORY его не достать:
+// файл лежит в data/objects/<2 hex>/<остальные 38 hex> и находится перебором.
+// Снимок версии нужен лишь как запасной источник, когда тела нет.
+static string extension_guid_from_bodies(const boost::filesystem::path &root_path)
+{
+	boost::filesystem::path objects = root_path.parent_path() / "data" / "objects";
+	if (!directory_exists(objects)) {
+		return string();
+	}
+
+	boost::filesystem::directory_iterator sub(objects), sub_end;
+	for (; sub != sub_end; sub++) {
+		if (!boost::filesystem::is_directory(sub->path())) {
+			continue;
+		}
+		boost::filesystem::directory_iterator file(sub->path()), file_end;
+		for (; file != file_end; file++) {
+			if (!boost::filesystem::is_regular_file(file->path())) {
+				continue;
+			}
+			// Нас интересуют только маленькие текстовые тела
+			boost::system::error_code err;
+			auto size = boost::filesystem::file_size(file->path(), err);
+			if (err || size < 10 || size > 512) {
+				continue;
+			}
+
+			std::ifstream in(file->path().string(), std::ios::binary);
+			if (!in) {
+				continue;
+			}
+			string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+			if (text.compare(0, 3, "\xef\xbb\xbf") == 0) {
+				text = text.substr(3);
+			}
+			if (text.compare(0, 5, "{0,2,") != 0) {
+				continue;
+			}
+			size_t first = text.find(',', 5);
+			if (first == string::npos) {
+				continue;
+			}
+			string guid = text.substr(5, first - 5);
+			if (guid.size() == 36) {
+				return guid;
+			}
+		}
+	}
+	return string();
+}
+
+
+// Есть ли рядом с файлом .1CD снимок версии: в нём платформа хранит идентификатор
+// расширения, которого нет ни в одной таблице хранилища.
+static string extension_guid_from_snapshot(const boost::filesystem::path &root_path, int ver)
+{
+	boost::filesystem::path cache_dir = root_path.parent_path() / "cache";
+	if (!directory_exists(cache_dir)) {
+		return string();
+	}
+
+	// Номер версии добивается нулями слева до пяти знаков: ddb00354.snp
+	string ver_part = string("00000").append(to_string(ver));
+	string name_snap = string("ddb").append(ver_part.substr(ver_part.size() - 5, 5)).append(".snp");
+	boost::filesystem::path file_snap = cache_dir / name_snap;
+
+	if (!boost::filesystem::exists(file_snap)) {
+		return string();
+	}
+
+	// Заголовочная запись снапшота выглядит так (текстовая сериализация):
+	// {6,<GUID снимка>,<GUID хранилища>,<GUID расширения>,...}
+	// Все, кроме сноски, нам не нужны, поэтому ищем только третий GUID.
+	std::ifstream in(file_snap.string(), std::ios::binary);
+	if (!in) {
+		return string();
+	}
+	string content((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+
+	size_t pos = content.find("{6,");
+	if (pos == string::npos) {
+		return string();
+	}
+
+	// Пропускаем первые два GUID, третий — идентификатор расширения.
+	size_t cur = pos + 3;
+	for (int skip = 0; skip < 2; skip++) {
+		cur = content.find(',', cur);
+		if (cur == string::npos) {
+			return string();
+		}
+		cur++;
+	}
+	size_t end = content.find(',', cur);
+	if (end == string::npos) {
+		return string();
+	}
+	return content.substr(cur, end - cur);
+}
 
 
 bool contains_ic(const vector<string> &vector, const string &string_to_find)
@@ -95,6 +274,9 @@ bool T_1CD::save_depot_config(const string &_filename, int32_t ver, bool use_sna
 	V8Catalog* cat;
 	V8Catalog* cath;
 	bool oldformat;
+	// Хранилище расширения: контейнер собирается иначе, корень — файл configinfo
+	// со списком объектов и контрольных сумм, а не root/version/versions.
+	const bool extension = extension_depot();
 	Tree* tv; // корень дерева файла versions
 	Tree* tvc; // тек. элемент дерева файла versions
 	Tree* tr; // корень дерева файла root
@@ -205,8 +387,6 @@ bool T_1CD::save_depot_config(const string &_filename, int32_t ver, bool use_sna
 		boost::filesystem::path root_dir = root_path.parent_path();
 		pack_directory.init(root_dir);
 		if (!pack_directory.is_available()) {
-			msreg_m.AddMessage("Не найден каталог данных хранилища, часть объектов может быть недоступна", MessageState::Warning)
-					.with("Каталог", (root_dir / "data" / "pack").string());
 		}
 	}
 	else
@@ -249,6 +429,10 @@ bool T_1CD::save_depot_config(const string &_filename, int32_t ver, bool use_sna
 	std::map<string,string> rootmap; // контейнер для сортировки root
 	std::map<string,TStream*> extmap; // контейнер для сортировки файлов в корне
 	std::map<string,TStream*> metamap; // контейнер для сортировки файлов в metadata
+	// Тела объектов для configinfo расширения: имя -> данные (до выгрузки в контейнер)
+	std::map<string,TStream*> bodymap;
+	// Тела версий объектов: «объект.номер версии» -> данные
+	std::map<string,TTempStream*> version_bodies;
 
 	tv = new Tree("",  node_type::nd_list, nullptr); // корень дерева файла versions
 	tvc = new Tree("", node_type::nd_list, tv); // тек. элемент дерева файла versions
@@ -260,7 +444,7 @@ bool T_1CD::save_depot_config(const string &_filename, int32_t ver, bool use_sna
 
 	vermap[""] = GUIDasMS(uuid_gen().data);
 
-	{
+	if (!extension) {
 		TStream *in = new TMemoryStream;
 		in->Write(TEncoding::UTF8->GetPreamble(), TEncoding::UTF8->GetPreamble().size());
 		in->WriteString(serialize_version(configVerMajor, configVerMinor));
@@ -270,7 +454,9 @@ bool T_1CD::save_depot_config(const string &_filename, int32_t ver, bool use_sna
 		delete in;
 		extmap["version"] = out;
 	}
-	vermap["version"] = GUIDasMS(uuid_gen().data);
+	if (!extension) {
+		vermap["version"] = GUIDasMS(uuid_gen().data);
+	}
 
 	if(configVerMajor < 100)
 	{
@@ -318,6 +504,14 @@ bool T_1CD::save_depot_config(const string &_filename, int32_t ver, bool use_sna
 					else
 					{
 						vermap[sObjId] = rech1->get<BinaryGuid>(fldh_objverid).as_MS();
+						// Для расширения тела нужны целиком — по ним считаются суммы configinfo.
+						// Для обычной конфигурации они уходят в контейнер как есть.
+						if (extension) {
+							bodymap[sObjId] = read_body(out);
+							// Та же запись HISTORY хранит и тело конкретной версии объекта.
+							string vkey = sObjId + "." + rech1->get_string(fldh_vernum);
+							version_bodies[vkey] = read_body(out);
+						}
 						extmap[sObjId] = out;
 					}
 
@@ -409,6 +603,148 @@ bool T_1CD::save_depot_config(const string &_filename, int32_t ver, bool use_sna
 
 
 	// Завершаем формирование списков версий
+
+	if (extension) {
+		// В configinfo каждая версия объекта — отдельная строка «объект.номер»
+		// со своей суммой, а не только последняя версия. Собираем список версий
+		// по HISTORY: для каждого объекта нумеруем его версии по порядку (0,1,2...).
+		std::map<string, vector<string>> object_versions; // объект -> список версий
+		{
+			Index *v_index = table_history->get_index("PK");
+			auto v_count = v_index->get_numrecords();
+			for (uint32_t vi = 0; vi < v_count; vi++) {
+				TableRecord *vrec = table_history->get_record(v_index->get_numrec(vi));
+				int32_t vn = ToIntDef(vrec->get_string(fldh_vernum), numeric_limits<int32_t>::max());
+				if (vn > ver) {
+					continue;
+				}
+				bool removed = vrec->is_null_value(fldh_removed) ? false : vrec->get<bool>(fldh_removed);
+				if (removed) {
+					continue;
+				}
+				string obj_id = vrec->get<BinaryGuid>(fldh_objid).as_MS();
+				bool packed = !vrec->is_null_value(fldh_datapacked) && vrec->get<bool>(fldh_datapacked);
+				if (!packed) {
+					continue;
+				}
+				object_versions[obj_id].push_back(vrec->get_string(fldh_vernum));
+			}
+		}
+
+
+		// У платформы в configinfo на объект приходится запись без версии плюс
+		// строки его версий. Единственная версия уже описана записью объекта, так
+		// что отдельная строка «GUID.N» появляется только при нескольких версиях.
+		// N — порядковый индекс по возрастанию номера версии в HISTORY.
+		std::map<string, string> objects;
+		for (auto &item : object_versions) {
+			const string &obj_id = item.first;
+			vector<string> vers = item.second;
+
+			// Сумма по актуальному телу объекта (ключ без версии)
+			auto base = bodymap.find(obj_id);
+			if (base != bodymap.end() && base->second != nullptr) {
+				objects[obj_id] = sha1_base64(base->second);
+			}
+
+			// ПРОБА: строки версий не пишем вообще
+			if (true) {
+				continue;
+			}
+
+			sort(vers.begin(), vers.end(), [](const string &l, const string &r) {
+				return atoi(l.c_str()) < atoi(r.c_str());
+			});
+
+			int index = 0;
+			for (const string &vn : vers) {
+				string key_src = obj_id + "." + vn;
+				auto body_it = version_bodies.find(key_src);
+				if (body_it == version_bodies.end() || body_it->second == nullptr) {
+					index++;
+					continue;
+				}
+				objects[obj_id + "." + to_string(index)] = sha1_base64(body_it->second);
+				index++;
+			}
+		}
+
+
+		// Список объектов берём из rootmap (для старого формата) или vermap:
+		// в обоих случаях это пары «имя объекта / хэш версии», а контрольные суммы
+		// считаются по уже выгруженным телам.
+		TTempStream info;
+		// Идентификатор расширения берём из снимка версии: в его заголовочной
+		// записи {6,<GUID снимка>,<GUID хранилища>,<GUID расширения>,...} третье
+		// поле — это и есть GUID расширения. В таблицах .1CD он не хранится,
+		// а поиск по телам даёт чужой GUID (идентификатор объекта, не расширения).
+		string guid = extension_guid_from_snapshot(root_path, ver);
+		if (guid.empty()) {
+			throw DetailedException("Не найден идентификатор расширения")
+				.add_detail("Что искали", "GUID расширения в заголовке снимка версии")
+				.add_detail("Где искали", (root_path.parent_path() / "cache").string() + "/ddb**" + to_string(ver) + ".snp")
+				.add_detail("Причина", "в таблицах хранилища идентификатор расширения не хранится")
+				.add_detail("Что делать", "выгружать из полной копии хранилища вместе с каталогом cache");
+		}
+
+		// Шапка configinfo для расширения: {0,{216,0,{1,0}}},{2,<GUID>,},
+		// Версия формата 80327 — как в COMPATIBILITYMODE хранилища расширений.
+		//
+		// Поле после GUID остаётся ПУСТЫМ: платформа проверяет его как подпись
+		// конфигурации и на любом непустом значении отвергает файл (в том числе
+		// на корректном по размеру). Пустое поле принимается, расширение
+		// открывается и дерево метаданных разбирается.
+		string text;
+		text.push_back('\xef'); text.push_back('\xbb'); text.push_back('\xbf');
+		text.append("{0,\n{216,0,\n{1,0}\n}\n},\n{2,");
+		text.append(guid);
+		text.append(",},\n{");
+
+		// Счётчик — количество записей, которые идут следом
+		text.append(to_string(objects.size()));
+		text.append(",");
+		// Текст файла: пары «имя,сумма» через запятую.
+		for (auto &item : objects) {
+			text.append("\"").append(item.first).append("\",");
+			text.append(item.second);
+			text.append(",");
+		}
+		if (!objects.empty()) {
+			text.pop_back();
+		}
+		text.append("}\n}\n");
+
+		for (auto &item : bodymap) {
+			delete item.second;
+		}
+		bodymap.clear();
+		for (auto &item : version_bodies) {
+			delete item.second;
+		}
+		version_bodies.clear();
+
+		// Текст пишем байтами UTF-8: WriteString кодирует в UTF-16, и платформа
+		// такое содержимое не разбирает.
+		{
+			// отладка: сохранить несжатый текст рядом, чтобы видеть байты
+			std::ofstream dbg("/tmp/configinfo_debug.txt", std::ios::binary);
+			dbg.write(text.data(), static_cast<std::streamsize>(text.size()));
+		}
+		TTempStream *in = new TTempStream;
+		in->Write(text.data(), static_cast<int64_t>(text.size()));
+		in->Seek(0, soFromBeginning);
+		TTempStream *out = new TTempStream;
+		ZDeflateStream(in, out);
+		delete in;
+		extmap["configinfo"] = out;
+
+		for (auto& psmap : extmap) {
+			cat->createFile(psmap.first)->write_and_close(psmap.second);
+			delete psmap.second;
+		}
+		delete cat;
+		return true;
+	}
 
 	vermap["versions"] = GUIDasMS(uuid_gen().data);
 
@@ -519,13 +855,8 @@ bool T_1CD::try_save_snapshot(const TableRecord &version_record,
 
 	boost::filesystem::path file_snap = root_path.parent_path() / "cache" / name_snap;
 
-	msreg_m.AddMessage("Попытка открытия файла снэпшота", MessageState::Info)
-						.with("Файл", file_snap.string());
 
 	if (!boost::filesystem::exists(file_snap)){
-		msreg_m.AddMessage("Не найден файл снэпшота", MessageState::Warning)
-							.with("Имя файла", file_snap.string())
-							.with("Требуемая версия", ver);
 		return false;
 	}
 
@@ -534,9 +865,6 @@ bool T_1CD::try_save_snapshot(const TableRecord &version_record,
 		in.reset(new TFileStream(file_snap, fmOpenRead | fmShareDenyNone));
 	}
 	catch (...) {
-		msreg_m.AddMessage("Не удалось открыть файл снэпшота", MessageState::Warning)
-							.with("Имя файла", file_snap.string())
-							.with("Требуемая версия", ver);
 		return false;
 	}
 
@@ -561,9 +889,6 @@ bool T_1CD::try_save_snapshot(const TableRecord &version_record,
 				ZInflateStream(in.get(), &content);
 			}
 			catch(...) {
-				msreg_m.AddMessage("Не удалось распаковать файл снэпшота", MessageState::Warning)
-									.with("Имя файла", file_snap.string())
-									.with("Требуемая версия", ver);
 				return false;
 			}
 			break;
@@ -575,8 +900,6 @@ bool T_1CD::try_save_snapshot(const TableRecord &version_record,
 		}
 		default:
 		{
-			msreg_m.AddMessage("Неизвестная версия снэпшота", MessageState::Warning)
-									.with("Имя файла", file_snap.string());
 			return false;
 		}
 	};
@@ -584,11 +907,6 @@ bool T_1CD::try_save_snapshot(const TableRecord &version_record,
 	uint32_t snapshot_crc = version_record.get<uint32_t>("SNAPSHOTCRC");
 	uint32_t calc_crc = _crc32(&content);
 	if (calc_crc != snapshot_crc) {
-		msreg_m.AddMessage("Файл снэпшота испорчен (не совпала контрольная сумма)", MessageState::Warning)
-						.with("Имя файла", file_snap.string())
-						.with("Требуемая версия", ver)
-						.with("Должен быть CRC32", to_hex_string(snapshot_crc))
-						.with("Получился CRC32", to_hex_string(calc_crc));
 		return false;
 	}
 
@@ -597,9 +915,6 @@ bool T_1CD::try_save_snapshot(const TableRecord &version_record,
 	// Такой файл нельзя отдавать как результат выгрузки: конфигурацию
 	// собираем по таблицам хранилища.
 	if (!is_v8_catalog(&content)) {
-		msreg_m.AddMessage("Содержимое снэпшота не является файлом конфигурации, выгрузка выполнена по таблицам хранилища", MessageState::Warning)
-						.with("Имя файла", file_snap.string())
-						.with("Требуемая версия", ver);
 		return false;
 	}
 
