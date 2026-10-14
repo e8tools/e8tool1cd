@@ -27,6 +27,7 @@
 #include <vector>
 
 #include "App.h"
+#include "ConsoleOutput.h"
 #include "ParseCommandLine.h"
 #include "ErrorCode.h"
 #include "Messenger.h"
@@ -608,11 +609,8 @@ void App::save_tables_sizes(const ParsedCommand &pc)
 
 void out_gpl_header()
 {
-	cout << "cTool_1CD  Copyright 2009-2017 awa, Copyright 2017-2018 E8 Tools Contributors"
-		 << endl
-		 << "This program comes with ABSOLUTELY NO WARRANTY; "
-				 "This is free software, and you are welcome to redistribute it under certain conditions."
-		 << endl;
+	Console::write_line(stdout, "cTool_1CD  Copyright 2009-2017 awa, Copyright 2017-2018 E8 Tools Contributors");
+	Console::write_line(stdout, "This program comes with ABSOLUTELY NO WARRANTY; This is free software, and you are welcome to redistribute it under certain conditions.");
 }
 
 int App::Run()
@@ -622,7 +620,7 @@ int App::Run()
 
 	if (commands.empty()) {
 		out_gpl_header();
-		cout << "Запусти cTool_1CD -h для справки" << endl;
+		Console::write_line(stdout, "Запусти cTool_1CD -h для справки");
 		return 0;
 	}
 
@@ -630,7 +628,7 @@ int App::Run()
 	for (const auto &pc : commands) {
 		switch (pc.command) {
 			case Command::help:
-				cout << comm.gethelpstring() << endl;
+				Console::write_line(stdout, comm.gethelpstring());
 				return 0;
 			case Command::no_verbose:
 				mess.setnoverbose(true);

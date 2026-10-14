@@ -23,6 +23,7 @@
 #include <boost/filesystem/fstream.hpp>
 
 #include "Messenger.h"
+#include "ConsoleOutput.h"
 
 using namespace std;
 
@@ -37,7 +38,7 @@ Messenger::Messenger()
 //---------------------------------------------------------------------------
 void Messenger::Status(const string &message)
 {
-	cout << message << endl;
+	Console::write_line(stdout, message);
 	AddMessage(message, MessageState::Empty);
 }
 
@@ -53,18 +54,24 @@ void Messenger::AddDetailedMessage(const string &message, const MessageState mst
 		return;
 	}
 
-	shared_ptr<ostream> output (&cerr, [](...){} );
-
-	if (!logfile.empty()) {
-		output = make_shared<boost::filesystem::ofstream>(boost::filesystem::path(logfile), std::ios_base::app);
+	if (logfile.empty()) {
+		Console::write_line(stderr, message);
+		if (param) {
+			for (auto it : *param) {
+				Console::write_line(stderr, "\t" + it);
+			}
+		}
+		return;
 	}
-	*output << message << endl;
+
+	boost::filesystem::ofstream output(boost::filesystem::path(logfile), std::ios_base::app);
+	output << message << endl;
 	if (param) {
 		for (auto it : *param) {
-			*output << "\t" << it << endl;
+			output << "\t" << it << endl;
 		}
 	}
-	output->flush();
+	output.flush();
 }
 
 //---------------------------------------------------------------------------
