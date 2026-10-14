@@ -44,6 +44,11 @@ void Messenger::Status(const string &message)
 //---------------------------------------------------------------------------
 void Messenger::AddDetailedMessage(const string &message, const MessageState mstate, const TStringList *param)
 {
+	// Код возврата утилиты зависит от того, были ли ошибки в процессе работы
+	if (mstate == MessageState::Error) {
+		has_error = true;
+	}
+
 	if (mstate < minimal_state) {
 		return;
 	}

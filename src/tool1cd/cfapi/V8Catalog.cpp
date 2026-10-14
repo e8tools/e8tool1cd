@@ -434,6 +434,13 @@ V8File* V8Catalog::createFile(const string &FileName, bool _selfzipped){
 		f->set_self_zipped(_selfzipped);
 		last = f;
 		_fatmodified = true;
+
+		// Версия хранилища растёт с каждым добавленным файлом: платформа пишет
+		// в это поле заголовка число файлов контейнера, и по нему читает таблицу
+		// блоков. Одно увеличение на всё сохранение даёт неверный заголовок.
+		if(!is_cfu) {
+			file_header.storage_ver++;
+		}
 	}
 	Lock->Release();
 	return f;
@@ -721,7 +728,7 @@ V8Catalog::~V8Catalog()
 		}
 		if(is_modified)
 		{
-			file_header.storage_ver++;
+			// Версию уже наращивали при добавлении файлов — здесь только запись.
 			data->Seek(8, soFromBeginning);
 			data->WriteBuffer(&file_header.storage_ver, sizeof(file_header.storage_ver));
 		}
@@ -867,7 +874,7 @@ void V8Catalog::Flush()
 		}
 		if(is_modified)
 		{
-			file_header.storage_ver++;
+			// Версию уже наращивали при добавлении файлов — здесь только запись.
 			data->Seek(8, soFromBeginning);
 			data->WriteBuffer(&file_header.storage_ver, sizeof(file_header.storage_ver));
 		}

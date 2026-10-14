@@ -482,16 +482,35 @@ void App::save_depot_config(const ParsedCommand &pc)
 
 	cfpath = boost::filesystem::absolute(cfpath);
 
-	if (!boost::iequals(cfpath.extension().string(), CF_STR)) {
+	// Хранилища расширений выгружаются в файл .cfe, обычные хранилища — в .cf
+	const string default_cf_ext = base1CD->extension_depot() ? string(CFE_STR) : string(CF_STR);
+	const string given_cf_ext = cfpath.extension().string();
+
+	if (!boost::iequals(given_cf_ext, CF_STR) && !boost::iequals(given_cf_ext, CFE_STR)) {
 		if (!directory_exists(cfpath)) {
+			msreg_g.AddError("Неверный путь для выгрузки конфигурации хранилища: ожидается каталог или файл .cf / .cfe")
+					.with("Путь", cfpath.string());
 			return;
 		}
-		cfpath /= string("v").append(std::to_string(version_number)).append(CF_STR);
+		cfpath /= string("v").append(std::to_string(version_number)).append(default_cf_ext);
 	}
-	if (base1CD->save_depot_config(cfpath.string(), version_number)) {
+
+	bool saved = false;
+	try {
+		saved = base1CD->save_depot_config(cfpath.string(), version_number, !ActionNoCacheChecked);
+	} catch (...) {
+		// Выгрузка прервана: неполный (пустой) контейнер в каталоге не оставляем
+		boost::system::error_code ec;
+		boost::filesystem::remove(cfpath, ec);
+		throw;
+	}
+
+	if (saved) {
 		msreg_g.AddMessage("Сохранение конфигурации хранилища завершено.", MessageState::Succesfull)
 				.with("Файл", cfpath.string());
 	} else {
+		boost::system::error_code ec;
+		boost::filesystem::remove(cfpath, ec);
 		msreg_g.AddMessage("Не удалось сохранить конфигурацию хранилища.", MessageState::Error)
 				.with("Файл", cfpath.string());
 	}
@@ -624,6 +643,9 @@ int App::Run()
 				break;
 			case Command::not_exclusively:
 				ActionOpenBaseNotMonopolyChecked = true;
+				break;
+			case Command::no_cache:
+				ActionNoCacheChecked = true;
 				break;
 			case Command::xml_blob_to_file:
 				ActionXMLSaveBLOBToFileChecked = IsTrueString(pc.param1);

@@ -20,6 +20,7 @@
 */
 
 #include "ParseCommandLine.h"
+#include "../version.h"
 #include "SystemClasses/String.hpp"
 
 using namespace System;
@@ -78,11 +79,13 @@ CommandDefinition CommandParse::definitions[] =
 	{"cleartable",         Command::clear_table,                1, ""}, // 41
 	{"dr",                 Command::delete_one_record,          2, ""}, // 42
 	{"deleterecord",       Command::delete_one_record,          2, ""}, // 43
+	{"nc",                 Command::no_cache,                    0, ""}, // 44
+	{"nocache",            Command::no_cache,                    0, ""}, // 45
 };
 
 
 std::string CommandParse::helpstring =
-"ctool1cd (с) 2009-2017 awa\r\n\
+"ctool1cd " TOOL1CD_VERSION " (с) 2009-2017 awa\r\n\
 \r\n\
 Запуск:\r\n\
 ctool1cd.exe [<ключи>] <1CD файл> [<ключи>]\r\n\
@@ -99,6 +102,9 @@ ctool1cd.exe [<ключи>] <1CD файл> [<ключи>]\r\n\
 "\r\n\
  -l, -logfile <файл>\r\n\
    записывать все сообщения программы в текстовый лог-файл. Если файл существует, он перезаписывается. Кодировка файла UTF8\r\n\
+\r\n\
+ -nc, -nocache\r\n\
+   не использовать кэш (снэпшоты) хранилища, данные читаются из таблиц 1CD.\r\n\
 \r\n\
  -ne, -NotExclusively\r\n\
    открыть базу не монопольно (Это небезопасно, возможны ошибки!).\r\n\

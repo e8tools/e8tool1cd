@@ -16,11 +16,13 @@ add_definitions (-DBOOST_ALL_NO_LIB)
 # Это нужно, чтобы под Windows Tool1CD не требовал vcredist
 if (NOGUI)
 
-	set (Boost_USE_STATIC_LIBS ON)
-	set (Boost_USE_MULTITHREADED OFF)
-	set (Boost_USE_STATIC_RUNTIME ON)
-
+	# Статический Boost имеет смысл только под MSVC: на Linux статических
+	# библиотек Boost нет, и find_package не находит ни одного варианта.
 	if (MSVC)
+
+		set (Boost_USE_STATIC_LIBS ON)
+		set (Boost_USE_MULTITHREADED OFF)
+		set (Boost_USE_STATIC_RUNTIME ON)
 
 		set (Boost_USE_MULTITHREADED ON)
 

@@ -27,6 +27,7 @@
 #include <cstring>
 #include <cstdint>
 #include <string>
+#include <fstream>
 #include <vector>
 
 using boost::filesystem::path;
@@ -38,7 +39,18 @@ static path copy_fixture(const std::string &relpath)
 	path src = path(CMAKE_SOURCE_DIR) / relpath;
 	path dst = boost::filesystem::temp_directory_path()
 	         / boost::filesystem::unique_path("tool1cd_%%%%%%%%.1CD");
-	boost::filesystem::copy_file(src, dst);
+	try {
+		boost::filesystem::copy_file(src, dst);
+	} catch (const boost::filesystem::filesystem_error &) {
+		// Каталог исходников и системный каталог временных файлов могут лежать на
+		// разных устройствах (сборка в контейнере): copy_file отдаёт EXDEV, поэтому
+		// копируем содержимое вручную.
+		std::ifstream in(src.string(), std::ios::binary);
+		std::ofstream out(dst.string(), std::ios::binary);
+		REQUIRE(in.good());
+		REQUIRE(out.good());
+		out << in.rdbuf();
+	}
 	return dst;
 }
 
