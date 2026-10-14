@@ -36,9 +36,14 @@ public:
 
 	void init(boost::filesystem::path& init_path);
 	TStream* get_data(const std::string &datahash, bool &found);
+
+	// Каталог данных хранилища (data/pack, data/objects) может отсутствовать,
+	// например когда на входе только файл .1CD — тогда данные берутся из таблиц
+	bool is_available() const { return available; }
 private:
 	std::vector<std::shared_ptr<Packdata>> packdates;
 	boost::filesystem::path objects_path;
+	bool available{ false };
 };
 
 #endif /* SRC_CTOOL1CD_PACKDIRECTORY_H_ */

@@ -78,7 +78,7 @@ bool contains_ic(const vector<string> &vector, const string &string_to_find)
 // ver - номер версии сохраняемой конфигурации
 // ver > 0 - используется переданный номер версии
 // ver <= 0 - номер версии от последней конфигурации. 0 - последняя конфигурация, -1 - предпоследняя и т.д., т.е. Номер версии определяется как номер последней + ver
-bool T_1CD::save_depot_config(const string &_filename, int32_t ver)
+bool T_1CD::save_depot_config(const string &_filename, int32_t ver, bool use_snapshot)
 {
 	Field* fldd_rootobjid;
 
@@ -155,7 +155,7 @@ bool T_1CD::save_depot_config(const string &_filename, int32_t ver)
 	boost::filesystem::path root_path(filename); // путь к 1cd
 
 
-	if (try_save_snapshot(versions_iterator.current(), ver, rootobj, root_path, filepath)) {
+	if (use_snapshot && try_save_snapshot(versions_iterator.current(), ver, rootobj, root_path, filepath)) {
 		return true;
 	}
 
@@ -204,6 +204,10 @@ bool T_1CD::save_depot_config(const string &_filename, int32_t ver)
 
 		boost::filesystem::path root_dir = root_path.parent_path();
 		pack_directory.init(root_dir);
+		if (!pack_directory.is_available()) {
+			msreg_m.AddMessage("Не найден каталог данных хранилища, данные будут прочитаны из таблиц", MessageState::Warning)
+					.with("Каталог", (root_dir / "data" / "pack").string());
+		}
 	}
 	else
 	{

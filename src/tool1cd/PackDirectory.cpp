@@ -45,10 +45,15 @@ PackDirectory::~PackDirectory() {
 }
 
 void PackDirectory::init(boost::filesystem::path& init_path) {
+	packdates.clear();
+	objects_path.clear();
+	available = false;
+
 	boost::filesystem::path subpath = init_path / "data" / "pack";
 	if(!directory_exists(subpath)) {
-		throw PackDirectoryDoesNotExistException("Не найден каталог хранилища. Обязательный с версии >= 6")
-				.add_detail("Каталог", subpath.string());
+		// Каталога с данными хранилища может не быть (например, если есть только
+		// файл .1CD). Это не ошибка: данные читаются из blob-полей таблиц.
+		return;
 	}
 	std::regex pack_mask("pack-.*\\.ind");
 	boost::filesystem::directory_iterator dit(subpath), dend;
@@ -61,6 +66,7 @@ void PackDirectory::init(boost::filesystem::path& init_path) {
 		packdates.push_back(pd);
 	}
 	objects_path = init_path / "data" / "objects";
+	available = true;
 }
 
 void binary_datahash(const std::string &datahash, void *buf)
@@ -74,6 +80,10 @@ void binary_datahash(const std::string &datahash, void *buf)
 TStream* PackDirectory::get_data(const std::string &datahash, bool &found)
 {
 	found = false;
+
+	if (!available) {
+		return nullptr;
+	}
 
 	char binary_hash[DATAHASH_FIELD_LENGTH];
 	binary_datahash(datahash, binary_hash);

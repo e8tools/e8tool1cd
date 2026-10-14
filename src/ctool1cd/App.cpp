@@ -495,10 +495,22 @@ void App::save_depot_config(const ParsedCommand &pc)
 		cfpath /= string("v").append(std::to_string(version_number)).append(default_cf_ext);
 	}
 
-	if (base1CD->save_depot_config(cfpath.string(), version_number)) {
+	bool saved = false;
+	try {
+		saved = base1CD->save_depot_config(cfpath.string(), version_number, !ActionNoCacheChecked);
+	} catch (...) {
+		// Выгрузка прервана: неполный (пустой) контейнер в каталоге не оставляем
+		boost::system::error_code ec;
+		boost::filesystem::remove(cfpath, ec);
+		throw;
+	}
+
+	if (saved) {
 		msreg_g.AddMessage("Сохранение конфигурации хранилища завершено.", MessageState::Succesfull)
 				.with("Файл", cfpath.string());
 	} else {
+		boost::system::error_code ec;
+		boost::filesystem::remove(cfpath, ec);
 		msreg_g.AddMessage("Не удалось сохранить конфигурацию хранилища.", MessageState::Error)
 				.with("Файл", cfpath.string());
 	}
@@ -631,6 +643,9 @@ int App::Run()
 				break;
 			case Command::not_exclusively:
 				ActionOpenBaseNotMonopolyChecked = true;
+				break;
+			case Command::no_cache:
+				ActionNoCacheChecked = true;
 				break;
 			case Command::xml_blob_to_file:
 				ActionXMLSaveBLOBToFileChecked = IsTrueString(pc.param1);

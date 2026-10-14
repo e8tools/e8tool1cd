@@ -48,6 +48,7 @@ private:
 	bool ActionOpenBaseNotMonopolyChecked{ false };
 	bool ActionXMLSaveBLOBToFileChecked{ false };
 	bool ActionXMLUnpackBLOBChecked{ true };
+	bool ActionNoCacheChecked{ false };
 
 	bool IsTrueString(const std::string &str) const;
 	void export_all_to_xml(const ParsedCommand& pc);
