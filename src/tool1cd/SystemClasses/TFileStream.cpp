@@ -32,13 +32,18 @@ namespace Classes {
 // файл, который читают (fmOpenRead), нельзя: на Windows это отказывает
 // для файла только для чтения или занятого другим процессом, размер
 // потока остаётся нулевым и первое же Seek даёт "Wrong offset".
+// Режим доступа выбирается по битам, а не по точному равенству: режим
+// приходит как комбинация (например fmOpenRead | fmShareDenyNone = 0x0040),
+// поэтому сравнение fileMode == fmOpenRead (0x0000) не срабатывало и файл
+// открывался на запись. Биты разделения (fmShare*) на openmode не влияют.
 static std::ios_base::openmode stream_mode(const uint16_t fileMode)
 {
 	std::ios_base::openmode mode = std::ios::binary;
 	if (fileMode == fmCreate) {
 		return mode | std::ios::in | std::ios::out | std::ios::trunc;
 	}
-	if (fileMode == fmOpenRead) {
+	if ((fileMode & fmOpenReadWrite) == 0) {
+		// запись не запрошена — открываем только на чтение
 		return mode | std::ios::in;
 	}
 	return mode | std::ios::in | std::ios::out;
@@ -50,7 +55,7 @@ static std::ios_base::openmode stream_mode(const uint16_t fileMode)
 static std::ios_base::openmode reopen_mode(const uint16_t fileMode)
 {
 	std::ios_base::openmode mode = std::ios::binary;
-	if (fileMode == fmOpenRead) {
+	if ((fileMode & fmOpenReadWrite) == 0) {
 		return mode | std::ios::in;
 	}
 	return mode | std::ios::in | std::ios::out;
@@ -64,7 +69,7 @@ TFileStream::TFileStream(const std::string &FileName, const uint16_t fileMode)
 	reopen(_stream);
 	m_position = 0;
 	const bool opened = _stream && _stream->is_open();
-	DebugTrace::file_open(filename, (fileMode == fmOpenRead) ? "read" : (fileMode == fmCreate ? "create" : "rw"),
+	DebugTrace::file_open(filename, ((fileMode & fmOpenReadWrite) == 0 ? ((fileMode == fmCreate) ? "create" : "read") : "rw"),
 		opened, m_size);
 	if (!opened) {
 		throw Exception(std::string("Файл не открыт: ").append(filename));
@@ -79,7 +84,7 @@ TFileStream::TFileStream(const boost::filesystem::path &path, const uint16_t fil
 	reopen(_stream);
 	m_position = 0;
 	const bool opened = _stream && _stream->is_open();
-	DebugTrace::file_open(filename, (fileMode == fmOpenRead) ? "read" : (fileMode == fmCreate ? "create" : "rw"),
+	DebugTrace::file_open(filename, ((fileMode & fmOpenReadWrite) == 0 ? ((fileMode == fmCreate) ? "create" : "read") : "rw"),
 		opened, m_size);
 	if (!opened) {
 		throw Exception(std::string("Файл не открыт: ").append(filename));
