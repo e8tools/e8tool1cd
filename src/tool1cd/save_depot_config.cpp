@@ -18,6 +18,8 @@
     You should have received a copy of the GNU Lesser General Public License
     along with Tool1CD Library.  If not, see <http://www.gnu.org/licenses/>.
 */
+#include <cstdio>
+#include <cstdlib>
 #include <vector>
 #include "SystemClasses/System.IOUtils.hpp"
 #include <boost/filesystem.hpp>
@@ -988,10 +990,22 @@ bool try_store_blob_data(const TableRecord &record,
 	}
 
 	if (!hash_field) {
+		if (std::getenv("TOOL1CD_DEBUG_SEEK") != nullptr) {
+			std::fprintf(stderr, "[BODY] у записи нет поля с хешем — тело не найти\n");
+		}
 		return false;
 	}
 
+	const std::string datahash = record.get_string(hash_field);
 	bool found = false;
-	out = pack_directory.get_data(record.get_string(hash_field), found);
+	out = pack_directory.get_data(datahash, found);
+
+	if (!found && std::getenv("TOOL1CD_DEBUG_SEEK") != nullptr) {
+		std::fprintf(stderr, "[BODY] тело не найдено, хеш=%s\n", datahash.c_str());
+		std::fprintf(stderr, "[BODY]   путь: %s\n", pack_directory.describe_object(datahash).c_str());
+		std::fprintf(stderr, "[BODY]   файл есть: %d\n", (int)pack_directory.object_exists(datahash));
+		std::fprintf(stderr, "[BODY]   есть в .ind: %d\n", (int)pack_directory.hash_in_index(datahash));
+		std::fprintf(stderr, "[BODY]   объектов в каталоге: %d\n", (int)pack_directory.count_objects());
+	}
 	return found;
 }

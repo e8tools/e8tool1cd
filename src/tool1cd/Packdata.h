@@ -50,6 +50,9 @@ public:
 	~Packdata() = default;
 
 	TStream* get_data(const char* datahash, bool &found);
+
+	// Есть ли такой хеш среди записей индекса.
+	bool has_hash(const char* datahash) const;
 private:
 	std::unique_ptr<TFileStream> pack;	// открытый на чтение файл *.pck
 	std::vector<record_data_hash> datahashes;

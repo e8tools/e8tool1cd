@@ -19,6 +19,7 @@
     along with Tool1CD Library.  If not, see <http://www.gnu.org/licenses/>.
 */
 
+#include <cstring>
 #include <regex>
 #include <cstdlib>
 #include <cstdio>
@@ -98,4 +99,14 @@ TStream* Packdata::get_data(const char* datahash, bool &found) {
 		}
 	}
 	return buffer;
+}
+
+bool Packdata::has_hash(const char* datahash) const
+{
+	for (const auto &record : datahashes) {
+		if (memcmp(datahash, record.datahash, DATAHASH_FIELD_LENGTH) == 0) {
+			return true;
+		}
+	}
+	return false;
 }

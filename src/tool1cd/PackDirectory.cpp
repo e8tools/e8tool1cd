@@ -77,6 +77,52 @@ void binary_datahash(const std::string &datahash, void *buf)
 	}
 }
 
+// Диагностика: путь файла тела объекта по хешу (data/objects/aa/bbbb...).
+std::string PackDirectory::describe_object(const std::string &datahash) const
+{
+	if (objects_path.empty()) {
+		return std::string("<каталог objects не задан>");
+	}
+	return object_path(objects_path, datahash).string();
+}
+
+bool PackDirectory::object_exists(const std::string &datahash) const
+{
+	if (objects_path.empty()) {
+		return false;
+	}
+	return boost::filesystem::exists(object_path(objects_path, datahash));
+}
+
+bool PackDirectory::hash_in_index(const std::string &datahash) const
+{
+	if ((int)datahash.size() < DATAHASH_FIELD_LENGTH * 2) {
+		return false;
+	}
+	char binary_hash[DATAHASH_FIELD_LENGTH];
+	binary_datahash(datahash, binary_hash);
+	for (const auto &pd : packdates) {
+		if (pd->has_hash(binary_hash)) {
+			return true;
+		}
+	}
+	return false;
+}
+
+size_t PackDirectory::count_objects() const
+{
+	if (objects_path.empty() || !boost::filesystem::exists(objects_path)) {
+		return 0;
+	}
+	size_t n = 0;
+	for (boost::filesystem::recursive_directory_iterator it(objects_path), end; it != end; ++it) {
+		if (boost::filesystem::is_regular_file(it->path())) {
+			++n;
+		}
+	}
+	return n;
+}
+
 TStream* PackDirectory::get_data(const std::string &datahash, bool &found)
 {
 	found = false;

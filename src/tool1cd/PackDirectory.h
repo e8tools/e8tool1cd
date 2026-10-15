@@ -40,6 +40,15 @@ public:
 	// Каталог данных хранилища (data/pack, data/objects) может отсутствовать,
 	// например когда на входе только файл .1CD — тогда данные берутся из таблиц
 	bool is_available() const { return available; }
+
+	// Диагностика: путь файла тела объекта по хешу.
+	std::string describe_object(const std::string &datahash) const;
+	// Диагностика: существует ли файл тела объекта.
+	bool object_exists(const std::string &datahash) const;
+	// Диагностика: есть ли хеш среди записей .ind.
+	bool hash_in_index(const std::string &datahash) const;
+	// Диагностика: сколько файлов тел в каталоге objects.
+	size_t count_objects() const;
 private:
 	std::vector<std::shared_ptr<Packdata>> packdates;
 	boost::filesystem::path objects_path;
