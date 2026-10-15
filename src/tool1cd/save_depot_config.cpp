@@ -1002,6 +1002,12 @@ bool try_store_blob_data(const TableRecord &record,
 
 	if (!found && std::getenv("TOOL1CD_DEBUG_SEEK") != nullptr) {
 		std::fprintf(stderr, "[BODY] тело не найдено, хеш=%s\n", datahash.c_str());
+		std::fprintf(stderr, "[BODY]   длина строки хеша: %d (ожидается 40)\n", (int)datahash.size());
+		std::fprintf(stderr, "[BODY]   байты:");
+		for (size_t _i = 0; _i < datahash.size(); ++_i) {
+			std::fprintf(stderr, " %02x", (unsigned char)datahash[_i]);
+		}
+		std::fprintf(stderr, "\n");
 		std::fprintf(stderr, "[BODY]   путь: %s\n", pack_directory.describe_object(datahash).c_str());
 		std::fprintf(stderr, "[BODY]   файл есть: %d\n", (int)pack_directory.object_exists(datahash));
 		std::fprintf(stderr, "[BODY]   есть в .ind: %d\n", (int)pack_directory.hash_in_index(datahash));
