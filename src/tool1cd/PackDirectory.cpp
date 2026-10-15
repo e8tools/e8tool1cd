@@ -158,9 +158,12 @@ TStream* PackDirectory::get_data(const std::string &datahash, bool &found)
 
 	try
 	{
+		// Поток НЕ закрываем: TFileStream::Read() при каждом чтении вызывает
+		// Reopen(), поэтому закрытый поток переоткрывал бы файл тысячи раз.
+		// На Windows такие повторы упираются в отказ ("Файл не открыт") и
+		// выгрузка обрывается. Поток закрывается сам в своём деструкторе.
 		TStream *buffer = new TFileStream(data_path, fmOpenRead | fmShareDenyNone);
 		found = true;
-		buffer->Close();
 		return buffer;
 	} catch (...) {
 	}
