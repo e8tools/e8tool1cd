@@ -58,6 +58,7 @@ public:
 
 protected:
 	std::string filename;
+	uint16_t open_mode {fmOpenRead};
 	std::shared_ptr<std::fstream> _stream;
 };
 

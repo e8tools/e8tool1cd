@@ -44,8 +44,20 @@ static std::ios_base::openmode stream_mode(const uint16_t fileMode)
 	return mode | std::ios::in | std::ios::out;
 }
 
+// Режим для ПЕРЕоткрытия уже существующего потока: как stream_mode, но без
+// усечения. Файл, созданный через fmCreate, может закрываться и открываться
+// снова (TableRecord: out->Close(), чтение позже) — усечение обнуляло бы его.
+static std::ios_base::openmode reopen_mode(const uint16_t fileMode)
+{
+	std::ios_base::openmode mode = std::ios::binary;
+	if (fileMode == fmOpenRead) {
+		return mode | std::ios::in;
+	}
+	return mode | std::ios::in | std::ios::out;
+}
+
 TFileStream::TFileStream(const std::string &FileName, const uint16_t fileMode)
-	: TWrapperStream(), filename(FileName)
+	: TWrapperStream(), filename(FileName), open_mode(fileMode)
 {
 	std::ios_base::openmode mode = stream_mode(fileMode);
 	_stream = std::make_shared<boost::filesystem::fstream>(boost::filesystem::path(filename), mode);
@@ -60,7 +72,7 @@ TFileStream::TFileStream(const std::string &FileName, const uint16_t fileMode)
 }
 
 TFileStream::TFileStream(const boost::filesystem::path &path, const uint16_t fileMode)
-	: TWrapperStream(), filename(path.string())
+	: TWrapperStream(), filename(path.string()), open_mode(fileMode)
 {
 	std::ios_base::openmode mode = stream_mode(fileMode);
 	_stream = std::make_shared<boost::filesystem::fstream>(path, mode);
@@ -92,8 +104,12 @@ void TFileStream::Reopen()
 			return;
 		}
 	}
+	// Открываем в ИСХОДНОМ режиме, а не всегда на запись: файлы хранилища
+	// (data/objects, data/pack) читаются, открывать их на запись нельзя —
+	// для файла с атрибутом "только для чтения" или занятого Windows
+	// откажет, поток останется пустым и первый же Seek даст "Wrong offset".
 	_stream = std::make_shared<boost::filesystem::fstream>(
-		boost::filesystem::path(filename), std::ios::binary | std::ios::in | std::ios::out);
+		boost::filesystem::path(filename), reopen_mode(open_mode));
 	if (!_stream->is_open()) {
 		throw Exception(std::string("Файл не открыт: ").append(filename));
 	}
