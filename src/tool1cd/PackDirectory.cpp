@@ -19,6 +19,7 @@
     along with Tool1CD Library.  If not, see <http://www.gnu.org/licenses/>.
 */
 
+#include <exception>
 #include <cstdio>
 #include <cstdlib>
 #include <regex>
@@ -173,7 +174,17 @@ TStream* PackDirectory::get_data(const std::string &datahash, bool &found)
 		TStream *buffer = new TFileStream(data_path, fmOpenRead | fmShareDenyNone);
 		found = true;
 		return buffer;
+	} catch (const std::exception &e) {
+		// Не глотаем причину: без этого отказ выглядит как "тело не найдено".
+		if (std::getenv("TOOL1CD_DEBUG_SEEK") != nullptr) {
+			std::fprintf(stderr, "[OPEN FAIL] %s: %s\n",
+				data_path.string().c_str(), e.what());
+		}
 	} catch (...) {
+		if (std::getenv("TOOL1CD_DEBUG_SEEK") != nullptr) {
+			std::fprintf(stderr, "[OPEN FAIL] %s: неизвестная ошибка\n",
+				data_path.string().c_str());
+		}
 	}
 	return nullptr;
 }
