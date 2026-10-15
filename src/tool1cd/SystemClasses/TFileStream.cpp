@@ -18,6 +18,8 @@
     You should have received a copy of the GNU Lesser General Public License
     along with Tool1CD Library.  If not, see <http://www.gnu.org/licenses/>.
 */
+#include <thread>
+#include <chrono>
 #include "TFileStream.hpp"
 #include "DebugTrace.h"
 #include "Exception.hpp"
@@ -61,12 +63,35 @@ static std::ios_base::openmode reopen_mode(const uint16_t fileMode)
 	return mode | std::ios::in | std::ios::out;
 }
 
+
+// Открытие файла с несколькими попытками: на Windows дескриптор и проверки
+// (антивирус, индексатор) освобождаются не мгновенно после закрытия, и
+// повторное открытие сразу может получить отказ, хотя файл доступен.
+template <typename OpenFn>
+static std::shared_ptr<boost::filesystem::fstream>
+open_with_retry(OpenFn open, const std::string &filename)
+{
+	std::shared_ptr<boost::filesystem::fstream> stream;
+	for (int attempt = 0; attempt < 10; ++attempt) {
+		stream = open();
+		if (stream && stream->is_open()) {
+			return stream;
+		}
+		std::this_thread::sleep_for(std::chrono::milliseconds(50));
+	}
+	return stream;
+}
+
 TFileStream::TFileStream(const std::string &FileName, const uint16_t fileMode)
 	: TWrapperStream(), filename(FileName), open_mode(fileMode)
 {
 	std::ios_base::openmode mode = stream_mode(fileMode);
-	_stream = std::make_shared<boost::filesystem::fstream>(boost::filesystem::path(filename), mode);
-	reopen(_stream);
+	_stream = open_with_retry([&] {
+		return std::make_shared<boost::filesystem::fstream>(boost::filesystem::path(filename), mode);
+	}, filename);
+	if (_stream && _stream->is_open()) {
+		reopen(_stream);
+	}
 	m_position = 0;
 	const bool opened = _stream && _stream->is_open();
 	DebugTrace::file_open(filename, ((fileMode & fmOpenReadWrite) == 0 ? ((fileMode == fmCreate) ? "create" : "read") : "rw"),
@@ -80,8 +105,12 @@ TFileStream::TFileStream(const boost::filesystem::path &path, const uint16_t fil
 	: TWrapperStream(), filename(path.string()), open_mode(fileMode)
 {
 	std::ios_base::openmode mode = stream_mode(fileMode);
-	_stream = std::make_shared<boost::filesystem::fstream>(path, mode);
-	reopen(_stream);
+	_stream = open_with_retry([&] {
+		return std::make_shared<boost::filesystem::fstream>(path, mode);
+	}, filename);
+	if (_stream && _stream->is_open()) {
+		reopen(_stream);
+	}
 	m_position = 0;
 	const bool opened = _stream && _stream->is_open();
 	DebugTrace::file_open(filename, ((fileMode & fmOpenReadWrite) == 0 ? ((fileMode == fmCreate) ? "create" : "read") : "rw"),
@@ -113,9 +142,11 @@ void TFileStream::Reopen()
 	// (data/objects, data/pack) читаются, открывать их на запись нельзя —
 	// для файла с атрибутом "только для чтения" или занятого Windows
 	// откажет, поток останется пустым и первый же Seek даст "Wrong offset".
-	_stream = std::make_shared<boost::filesystem::fstream>(
-		boost::filesystem::path(filename), reopen_mode(open_mode));
-	if (!_stream->is_open()) {
+	_stream = open_with_retry([&] {
+		return std::make_shared<boost::filesystem::fstream>(
+			boost::filesystem::path(filename), reopen_mode(open_mode));
+	}, filename);
+	if (!_stream || !_stream->is_open()) {
 		throw Exception(std::string("Файл не открыт: ").append(filename));
 	}
 	reopen(_stream);
