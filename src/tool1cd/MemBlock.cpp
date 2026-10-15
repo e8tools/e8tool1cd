@@ -20,6 +20,7 @@
 */
 
 #include "MemBlock.h"
+#include "DebugTrace.h"
 #include "Constants.h"
 #include "SystemClasses/GetTickCount.hpp"
 
@@ -42,16 +43,20 @@ bool for_write, bool read)
 		{
 			if(read)
 			{
+				DebugTrace::block_read((int64_t)block_num, (int64_t)block_num * page_size, page_size, fs->GetSize());
 				fs->Seek((int64_t)block_num * page_size, (TSeekOrigin)soFromBeginning);
 				fs->ReadBuffer(buf, page_size);
+				DebugTrace::block_signature((int64_t)block_num, (const unsigned char*)buf, 16);
 			}
 			else memset(buf, 0, page_size);
 		}
 	}
 	else
 	{
+		DebugTrace::block_read((int64_t)block_num, (int64_t)block_num * page_size, page_size, fs->GetSize());
 		fs->Seek((int64_t)block_num * page_size, (TSeekOrigin)soFromBeginning);
 		fs->ReadBuffer(buf, page_size);
+		DebugTrace::block_signature((int64_t)block_num, (const unsigned char*)buf, 16);
 	}
 
 	std::shared_ptr<MemBlock> block(new MemBlock(page_size, block_num));

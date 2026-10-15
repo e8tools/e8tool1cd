@@ -50,6 +50,7 @@ public:
 
 	int16_t GetHandle() const;
 
+	virtual std::string describe() const override { return filename; }
 	virtual void Close() override;
 	virtual void Reopen();
 	virtual int64_t Read(void *Buffer, int64_t Count) override;

@@ -717,9 +717,13 @@ bool T_1CD::save_depot_config(const string &_filename, int32_t ver, bool use_sna
 		// а поиск по телам даёт чужой GUID (идентификатор объекта, не расширения).
 		string guid = extension_guid_from_snapshot(root_path, ver);
 		if (guid.empty()) {
+			// Резерв: снимка может не быть — хранилище без каталога cache.
+			guid = extension_guid_from_bodies(root_path);
+		}
+		if (guid.empty()) {
 			throw DetailedException("Не найден идентификатор расширения")
-				.add_detail("Что искали", "GUID расширения в заголовке снимка версии")
-				.add_detail("Где искали", (root_path.parent_path() / "cache").string() + "/ddb**" + to_string(ver) + ".snp")
+				.add_detail("Что искали", "GUID расширения в снимке версии или в телах хранилища")
+				.add_detail("Где искали", (root_path.parent_path() / "cache").string() + "/ddb**" + to_string(ver) + ".snp и data/objects")
 				.add_detail("Причина", "в таблицах хранилища идентификатор расширения не хранится")
 				.add_detail("Что делать", "выгружать из полной копии хранилища вместе с каталогом cache");
 		}

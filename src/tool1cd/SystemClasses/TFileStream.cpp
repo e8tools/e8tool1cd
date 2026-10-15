@@ -19,6 +19,7 @@
     along with Tool1CD Library.  If not, see <http://www.gnu.org/licenses/>.
 */
 #include "TFileStream.hpp"
+#include "DebugTrace.h"
 #include <boost/filesystem.hpp>
 #include <boost/filesystem/fstream.hpp>
 
@@ -49,6 +50,8 @@ TFileStream::TFileStream(const std::string &FileName, const uint16_t fileMode)
 	_stream = std::make_shared<boost::filesystem::fstream>(boost::filesystem::path(filename), mode);
 	reopen(_stream);
 	m_position = 0;
+	DebugTrace::file_open(filename, (fileMode == fmOpenRead) ? "read" : (fileMode == fmCreate ? "create" : "rw"),
+		_stream && _stream->is_open(), m_size);
 }
 
 TFileStream::TFileStream(const boost::filesystem::path &path, const uint16_t fileMode)
@@ -58,6 +61,8 @@ TFileStream::TFileStream(const boost::filesystem::path &path, const uint16_t fil
 	_stream = std::make_shared<boost::filesystem::fstream>(path, mode);
 	reopen(_stream);
 	m_position = 0;
+	DebugTrace::file_open(filename, (fileMode == fmOpenRead) ? "read" : (fileMode == fmCreate ? "create" : "rw"),
+		_stream && _stream->is_open(), m_size);
 }
 
 

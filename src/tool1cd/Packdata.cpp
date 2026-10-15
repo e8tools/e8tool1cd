@@ -20,6 +20,8 @@
 */
 
 #include <regex>
+#include <cstdlib>
+#include <cstdio>
 
 #include "Packdata.h"
 #include "MessageRegistration.h"
@@ -60,9 +62,35 @@ TStream* Packdata::get_data(const char* datahash, bool &found) {
 
 	for(const auto &record: datahashes) {
 		if(memcmp(datahash, record.datahash, DATAHASH_FIELD_LENGTH) == 0) {
+
+			// Смещение и длина берутся из .ind. Если .pck перезаписывается
+			// сервером 1С, пара .ind/.pck может быть рассогласована: смещение
+			// или длина окажутся за концом файла. Раньше это давало
+			// "Wrong offset" и валило всю выгрузку — пропускаем такую запись,
+			// данные доберутся из снэпшота или blob-полей таблиц.
+			const int64_t pack_size = pack->GetSize();
+			if (record.offset < 0 || record.offset + (int64_t)sizeof(int64_t) > pack_size) {
+				if (std::getenv("TOOL1CD_DEBUG_SEEK") != nullptr) {
+					std::fprintf(stderr,
+						"[PACK] запись вне .pck: offset=%lld size=%lld — пропуск\n",
+						(long long)record.offset, (long long)pack_size);
+				}
+				continue;
+			}
+
 			pack->Seek(record.offset, soBeginning);
 			int64_t packlen = 0;
 			pack->Read(&packlen, sizeof(packlen));
+
+			if (packlen < 0 || record.offset + (int64_t)sizeof(int64_t) + packlen > pack_size) {
+				if (std::getenv("TOOL1CD_DEBUG_SEEK") != nullptr) {
+					std::fprintf(stderr,
+						"[PACK] длина записи вне .pck: offset=%lld len=%lld size=%lld — пропуск\n",
+						(long long)record.offset, (long long)packlen, (long long)pack_size);
+				}
+				continue;
+			}
+
 			buffer = new TTempStream;
 			buffer->CopyFrom(pack.get(), packlen);
 			buffer->Close();

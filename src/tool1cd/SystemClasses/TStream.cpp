@@ -19,6 +19,78 @@
     along with Tool1CD Library.  If not, see <http://www.gnu.org/licenses/>.
 */
 #include "TStream.hpp"
+#include "DebugTrace.h"
+
+#include <cstdlib>
+#include <cstdio>
+#include <string>
+
+// Диагностика выхода за границы потока. Включается переменной окружения
+// TOOL1CD_DEBUG_SEEK=1. Печатает, какой файл читается, куда и докуда.
+static bool tool1cd_seek_debug()
+{
+	static const bool on = (std::getenv("TOOL1CD_DEBUG_SEEK") != nullptr);
+	return on;
+}
+
+static const char* tool1cd_origin_name(const TSeekOrigin Origin)
+{
+	if (Origin == soBeginning) return "begin";
+	if (Origin == soEnd)       return "end";
+	return "current";
+}
+
+static void tool1cd_trace_dump();
+
+static void tool1cd_report_bad_seek(const TStream* self, int64_t offset,
+                                    TSeekOrigin Origin, int64_t size, int64_t pos)
+{
+	if (!tool1cd_seek_debug()) return;
+	std::fprintf(stderr,
+		"[SEEK] Wrong offset: файл=%s режим=%s offset=%lld pos=%lld size=%lld\n",
+		self ? self->describe().c_str() : "?",
+		tool1cd_origin_name(Origin),
+		(long long)offset, (long long)pos, (long long)size);
+	tool1cd_trace_dump();
+}
+
+// Сколько раз читали и писали: видно, до какого места дошла обработка.
+// Кольцевой журнал операций Seek: при сбое видно, что читалось перед ним.
+struct SeekTraceEntry {
+	const char* what;
+	long long   offset;
+	long long   pos;
+	long long   size;
+};
+
+static const int SEEK_TRACE_MAX = 64;
+static SeekTraceEntry& tool1cd_trace_ring(int idx) { static SeekTraceEntry r[SEEK_TRACE_MAX]; return r[idx]; }
+static int& tool1cd_trace_head() { static int h = 0; return h; }
+
+static void tool1cd_trace_add(const char* what, int64_t offset, int64_t pos, int64_t size)
+{
+	if (!tool1cd_seek_debug()) return;
+	int& h = tool1cd_trace_head();
+	SeekTraceEntry& e = tool1cd_trace_ring(h % SEEK_TRACE_MAX);
+	e.what = what; e.offset = (long long)offset; e.pos = (long long)pos; e.size = (long long)size;
+	++h;
+}
+
+static void tool1cd_trace_dump()
+{
+	if (!tool1cd_seek_debug()) return;
+	int h = tool1cd_trace_head();
+	int n = (h < SEEK_TRACE_MAX) ? h : SEEK_TRACE_MAX;
+	std::fprintf(stderr, "[SEEK] предыстория последних %d операций (старые сверху):\n", n);
+	for (int i = 0; i < n; ++i) {
+		const SeekTraceEntry& e = tool1cd_trace_ring((h - n + i + SEEK_TRACE_MAX * 2) % SEEK_TRACE_MAX);
+		std::fprintf(stderr, "    %-8s offset=%-12lld pos=%-12lld size=%lld\n",
+			e.what ? e.what : "?", e.offset, e.pos, e.size);
+	}
+}
+
+static long long& tool1cd_read_counter() { static long long n = 0; return n; }
+static long long& tool1cd_write_counter() { static long long n = 0; return n; }
 #include "Exception.hpp"
 #include <cstring>
 
@@ -60,6 +132,7 @@ int64_t TStream::Seek(const int64_t offset, const TSeekOrigin Origin)
 	if (Origin == soFromBeginning) {
 
 		if (offset > GetSize()) {
+			DebugTrace::fail_seek(describe(), tool1cd_origin_name(Origin), offset, m_position, GetSize());
 			throw Exception("Wrong offset");
 		}
 		m_position = offset;
@@ -69,16 +142,19 @@ int64_t TStream::Seek(const int64_t offset, const TSeekOrigin Origin)
 		m_position = GetSize() - offset;
 
 		if (GetSize() < offset) {
+			DebugTrace::fail_seek(describe(), tool1cd_origin_name(Origin), offset, m_position, GetSize());
 			throw Exception("Wrong offset");
 		}
 
 	} else {
 
 		if (m_position + offset < 0 || m_position + offset > GetSize()) {
+			DebugTrace::fail_seek(describe(), tool1cd_origin_name(Origin), offset, m_position, GetSize());
 			throw Exception("Wrong offset");
 		}
 		m_position += offset;
 	}
+	DebugTrace::op("seek", describe(), offset, m_position, GetSize());
 	return m_position;
 }
 

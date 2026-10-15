@@ -55,6 +55,9 @@ public:
 
 	virtual int64_t GetSize() const;
 
+	// Описание потока для диагностики: имя файла, если он есть.
+	virtual std::string describe() const { return std::string("<stream>"); }
+
 	virtual void SetSize(int64_t NewSize);
 
 	virtual int64_t GetPosition() const;
