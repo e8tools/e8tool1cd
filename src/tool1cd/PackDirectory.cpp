@@ -19,6 +19,8 @@
     along with Tool1CD Library.  If not, see <http://www.gnu.org/licenses/>.
 */
 
+#include <cstdio>
+#include <cstdlib>
 #include <regex>
 
 #include "PackDirectory.h"
@@ -152,6 +154,12 @@ TStream* PackDirectory::get_data(const std::string &datahash, bool &found)
 	}
 
 	auto data_path = object_path(objects_path, datahash);
+	if (std::getenv("TOOL1CD_DEBUG_SEEK") != nullptr) {
+		std::fprintf(stderr, "[GET ] available=%d objects=%s packdata=%d\n",
+			(int)available, objects_path.string().c_str(), (int)packdates.size());
+		std::fprintf(stderr, "[GET ] путь=%s есть=%d\n",
+			data_path.string().c_str(), (int)boost::filesystem::exists(data_path));
+	}
 	if (!boost::filesystem::exists(data_path)) {
 		return nullptr;
 	}
