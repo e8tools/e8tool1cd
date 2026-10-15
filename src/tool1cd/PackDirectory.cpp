@@ -29,7 +29,17 @@
 boost::filesystem::path object_path(const boost::filesystem::path &rootpath, const std::string &datahash)
 {
 	// aabbccddeeff -> ./data/objects/aa/bbccddeeff
-	return rootpath / datahash.substr(0, 2) / datahash.substr(2, datahash.size() - 2);
+	// Хеш в имени файла хранится без первых двух символов (они образуют имя
+	// каталога). Строку обрезаем до DATAHASH_FIELD_LENGTH*2: она может прийти
+	// с лишними байтами, и тогда в путь попали бы лишние символы.
+	std::string hex = datahash;
+	if (hex.size() > DATAHASH_FIELD_LENGTH * 2) {
+		hex.resize(DATAHASH_FIELD_LENGTH * 2);
+	}
+	if (hex.size() < 2) {
+		return rootpath / hex;
+	}
+	return rootpath / hex.substr(0, 2) / hex.substr(2);
 }
 
 

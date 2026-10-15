@@ -40,7 +40,7 @@ namespace Convert {
 string from_binary(const uint8_t *fr, int32_t length)
 {
 	string result;
-	result.resize((length + 1) * 2);
+	result.resize(length * 2);
 
 	for(int32_t i = 0; i < length; i++) {
 		char sym = '0' + (fr[i] >> 4);
@@ -54,8 +54,6 @@ string from_binary(const uint8_t *fr, int32_t length)
 		}
 		result[(i << 1) + 1] = sym;
 	}
-
-	result[length << 1] = 0;
 
 	return result;
 }
