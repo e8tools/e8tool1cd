@@ -20,6 +20,7 @@
 */
 #include "TFileStream.hpp"
 #include "DebugTrace.h"
+#include "Exception.hpp"
 #include <boost/filesystem.hpp>
 #include <boost/filesystem/fstream.hpp>
 
@@ -50,8 +51,12 @@ TFileStream::TFileStream(const std::string &FileName, const uint16_t fileMode)
 	_stream = std::make_shared<boost::filesystem::fstream>(boost::filesystem::path(filename), mode);
 	reopen(_stream);
 	m_position = 0;
+	const bool opened = _stream && _stream->is_open();
 	DebugTrace::file_open(filename, (fileMode == fmOpenRead) ? "read" : (fileMode == fmCreate ? "create" : "rw"),
-		_stream && _stream->is_open(), m_size);
+		opened, m_size);
+	if (!opened) {
+		throw Exception(std::string("Файл не открыт: ").append(filename));
+	}
 }
 
 TFileStream::TFileStream(const boost::filesystem::path &path, const uint16_t fileMode)
@@ -61,8 +66,12 @@ TFileStream::TFileStream(const boost::filesystem::path &path, const uint16_t fil
 	_stream = std::make_shared<boost::filesystem::fstream>(path, mode);
 	reopen(_stream);
 	m_position = 0;
+	const bool opened = _stream && _stream->is_open();
 	DebugTrace::file_open(filename, (fileMode == fmOpenRead) ? "read" : (fileMode == fmCreate ? "create" : "rw"),
-		_stream && _stream->is_open(), m_size);
+		opened, m_size);
+	if (!opened) {
+		throw Exception(std::string("Файл не открыт: ").append(filename));
+	}
 }
 
 
@@ -85,13 +94,22 @@ void TFileStream::Reopen()
 	}
 	_stream = std::make_shared<boost::filesystem::fstream>(
 		boost::filesystem::path(filename), std::ios::binary | std::ios::in | std::ios::out);
+	if (!_stream->is_open()) {
+		throw Exception(std::string("Файл не открыт: ").append(filename));
+	}
 	reopen(_stream);
 }
 
 
 void TFileStream::Close()
 {
-	_stream->close();
+	// Идемпотентно: Close() вызывается и явно (TTempStream), и из деструктора.
+	if (!_stream) {
+		return;
+	}
+	if (_stream->is_open()) {
+		_stream->close();
+	}
 	_stream.reset();
 }
 
