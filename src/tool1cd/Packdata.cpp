@@ -94,7 +94,8 @@ TStream* Packdata::get_data(const char* datahash, bool &found) {
 
 			buffer = new TTempStream;
 			buffer->CopyFrom(pack.get(), packlen);
-			buffer->Close();
+			// Поток не закрываем: его читают позже, а чтение переоткрывает
+			// файл (TFileStream::Read -> Reopen). Закроется в деструкторе.
 			found = true;
 		}
 	}

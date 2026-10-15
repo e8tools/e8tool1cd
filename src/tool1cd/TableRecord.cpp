@@ -194,7 +194,9 @@ bool TableRecord::try_store_blob_data(const Field *field, TStream *&out, bool in
 	else {
 		table->readBlob(out, b.blob_start, b.blob_length);
 	}
-	out->Close();
+	// Поток не закрываем: вызывающий код читает его позже, а TFileStream::Read
+	// при каждом чтении вызывает Reopen() — закрытый поток переоткрывал бы
+	// файл на каждое чтение. Поток закрывается в деструкторе.
 	return true;
 }
 
